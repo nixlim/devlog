@@ -1,5 +1,7 @@
 # DevLog: Death Spiral Prevention for Claude Code
 
+> **Based on the work of [Kousha Mazloumi](https://www.linkedin.com/pulse/death-spirals-why-smart-agents-fail-how-make-them-wiser-mazloumi-t7mxe/)** — this project implements the ideas from his article *"Death Spirals: Why Smart Agents Fail and How to Make Them Wiser"*, which identified the core anti-patterns and proposed the meta-cognitive companion architecture.
+
 A hooks-based meta-cognitive companion that detects when a Claude Code agent is stuck in a failing loop and injects interventions to break the cycle.
 
 ## The Problem
