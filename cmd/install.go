@@ -186,7 +186,7 @@ func persistInstallConfig(projectRoot, hostName, hostCommand, summarizerModel, c
 	cfg.Host = hostName
 	if hostCommand != "" {
 		cfg.HostCommand = hostCommand
-	} else if cfg.HostCommand == "" {
+	} else {
 		cfg.HostCommand = hostName
 	}
 	if summarizerModel != "" {

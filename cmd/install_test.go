@@ -401,6 +401,28 @@ func TestInstallAutoDetectOpenCodeOnly(t *testing.T) {
 	}
 }
 
+func TestInstallOpenCodeSetsHostCommand(t *testing.T) {
+	root := t.TempDir()
+	binDir := t.TempDir()
+	writeFakeBinary(t, binDir, "opencode")
+	t.Setenv("PATH", binDir)
+
+	withStreams(t)
+	code := Install([]string{
+		"--host", "opencode",
+		"--project", root,
+		"--plugin-dir", filepath.Join(root, "plugins"),
+		"--opencode-config", filepath.Join(root, "opencode.json"),
+	})
+	if code != 0 {
+		t.Fatalf("Install exit = %d, want 0", code)
+	}
+	cfg := readInstalledConfig(t, root)
+	if cfg.HostCommand != "opencode" {
+		t.Errorf("HostCommand = %q, want opencode", cfg.HostCommand)
+	}
+}
+
 func TestInstallBothDetectedPrefersClaude(t *testing.T) {
 	root := t.TempDir()
 	binDir := t.TempDir()
