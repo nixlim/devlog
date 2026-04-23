@@ -262,6 +262,73 @@ func TestConfigHelpFlag(t *testing.T) {
 	}
 }
 
+func TestConfigMigrationClaudeCommandOnly(t *testing.T) {
+	// Old-style config: only claude_command is present. Loader must mirror
+	// it into host_command and default Host to "claude".
+	root := testutil.NewTempDevlogDir(t)
+	configPath := filepath.Join(root, ".devlog", "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"claude_command":"/opt/old/claude"}`), 0o644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	cfg, err := state.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Host != "claude" {
+		t.Errorf("Host = %q, want claude", cfg.Host)
+	}
+	if cfg.HostCommand != "/opt/old/claude" {
+		t.Errorf("HostCommand = %q, want /opt/old/claude (mirrored from claude_command)", cfg.HostCommand)
+	}
+	if cfg.ClaudeCommand != "/opt/old/claude" {
+		t.Errorf("ClaudeCommand = %q, want /opt/old/claude", cfg.ClaudeCommand)
+	}
+}
+
+func TestConfigMigrationHostCommandWins(t *testing.T) {
+	// New-style config with explicit host_command must take precedence
+	// over claude_command.
+	root := testutil.NewTempDevlogDir(t)
+	configPath := filepath.Join(root, ".devlog", "config.json")
+	if err := os.WriteFile(configPath,
+		[]byte(`{"host":"opencode","host_command":"/usr/local/bin/opencode","claude_command":"/opt/old/claude"}`),
+		0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := state.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Host != "opencode" {
+		t.Errorf("Host = %q, want opencode", cfg.Host)
+	}
+	if cfg.HostCommand != "/usr/local/bin/opencode" {
+		t.Errorf("HostCommand = %q, want /usr/local/bin/opencode", cfg.HostCommand)
+	}
+}
+
+func TestConfigMigrationMissingHostDefaults(t *testing.T) {
+	// Config with no host field at all should default Host to "claude".
+	root := testutil.NewTempDevlogDir(t)
+	configPath := filepath.Join(root, ".devlog", "config.json")
+	if err := os.WriteFile(configPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write empty config: %v", err)
+	}
+
+	cfg, err := state.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Host != "claude" {
+		t.Errorf("Host = %q, want claude (default)", cfg.Host)
+	}
+	if cfg.HostCommand != "claude" {
+		t.Errorf("HostCommand = %q, want claude (default)", cfg.HostCommand)
+	}
+}
+
 func TestConfigListWithoutConfigFileShowsDefaults(t *testing.T) {
 	// No config.json present; LoadConfig should hand back defaults.
 	root := testutil.NewTempDevlogDir(t)

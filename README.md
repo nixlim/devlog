@@ -139,6 +139,18 @@ devlog install
 
 That's it. DevLog is now monitoring the agent's work.
 
+## OpenCode
+
+DevLog also supports [OpenCode](https://opencode.ai) as an alternative host. `devlog install` auto-detects which host is configured for the project; pass `--host opencode` to force OpenCode when both are present:
+
+```bash
+devlog install --host opencode
+```
+
+On OpenCode, DevLog writes its plugin shim to `.opencode/plugins/devlog.ts` and registers it in `opencode.json`. The same capture / flush / companion pipeline runs — only the hook surface changes.
+
+> **Deprecation:** the legacy `claude_command` config field is still read for backward compatibility and is transparently migrated to `host_command` on first load. New installs should use `host` and `host_command` instead.
+
 ## CLI Reference
 
 | Command | Context | Description |
@@ -167,6 +179,8 @@ All parameters are tunable via `devlog config`:
 | `companion_interval` | 5 | Log entries before triggering companion |
 | `summarizer_model` | `claude-haiku-4-5-20251001` | Model for dev log summarization |
 | `companion_model` | `claude-sonnet-4-6` | Model for anti-pattern detection |
+| `host` | `claude` | Host backend: `claude` or `opencode` |
+| `host_command` | `claude` | Path to the host CLI binary |
 | `enabled` | true | Master on/off switch |
 | `max_diff_chars` | 2000 | Max chars per diff entry in buffer |
 | `max_detail_chars` | 200 | Max chars for Edit old/new string summaries |

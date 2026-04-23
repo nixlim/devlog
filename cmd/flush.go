@@ -13,23 +13,33 @@ import (
 	"time"
 
 	"devlog/internal/buffer"
-	"devlog/internal/claude"
 	"devlog/internal/devlog"
 	derrors "devlog/internal/errors"
+	"devlog/internal/host"
 	"devlog/internal/prompt"
 	"devlog/internal/state"
 )
 
-// flushClaudeRunner is the subprocess runner. Package-level so tests can
-// swap in a stub without compiling a real claude binary.
-var flushClaudeRunner = func(cfg *state.Config) claudeRunnerIface {
-	return claude.New(cfg.ClaudeCommand)
+// flushLLMRunner resolves the LLM backend for the summariser. Package-
+// level so tests can swap in a stub without compiling a real claude
+// binary. Returns nil if no host is registered under the configured name;
+// the caller surfaces that as a classifiable error.
+var flushLLMRunner = func(cfg *state.Config) llmRunner {
+	h, ok := host.Lookup(cfg.Host)
+	if !ok {
+		return nil
+	}
+	if c, ok := h.(host.Configurable); ok {
+		c.SetCommand(cfg.HostCommand)
+	}
+	return h
 }
 
-// claudeRunnerIface is the narrow surface flush depends on; both the real
-// *claude.Runner and test fakes implement it.
-type claudeRunnerIface interface {
-	Run(ctx context.Context, model, prompt string, timeout time.Duration) (*claude.Response, error)
+// llmRunner is the narrow surface flush depends on. host.Host satisfies
+// it today; tests provide their own implementations without having to
+// stub out install/detect.
+type llmRunner interface {
+	RunLLM(ctx context.Context, model, prompt string, timeout time.Duration) (*host.Response, error)
 }
 
 // flushCompanionSpawner launches `devlog companion` in the background.
@@ -191,7 +201,7 @@ func flushExecute(paths devlogLayout, cfg *state.Config, root string) int {
 
 	summary, model, durationMS, err := invokeSummariser(cfg, string(task), priorLogs, entries)
 	if err != nil {
-		logAndPrint(paths.errorsLog, classifySummariserError(err, paths.errorsLog))
+		logAndPrint(paths.errorsLog, classifySummariserError(err, cfg.Host, paths.errorsLog))
 		return 1
 	}
 
@@ -269,20 +279,24 @@ func releaseFlushGuard(statePath, errorsLogPath string) {
 	}
 }
 
-// invokeSummariser builds the prompt and runs claude. Returns the summary
-// text (trimmed), the model name, and the duration reported by claude.
+// invokeSummariser builds the prompt and runs the configured host. Returns
+// the summary text (trimmed), the model name, and the duration reported
+// by the host.
 func invokeSummariser(cfg *state.Config, task string, priorLogs []devlog.Entry,
 	entries []buffer.Entry) (string, string, int, error) {
 	promptText := prompt.BuildSummarizerPrompt(task, priorLogs, entries)
 
-	runner := flushClaudeRunner(cfg)
+	runner := flushLLMRunner(cfg)
+	if runner == nil {
+		return "", "", 0, fmt.Errorf("no LLM host registered")
+	}
 	timeout := time.Duration(cfg.SummarizerTimeoutSeconds) * time.Second
-	resp, err := runner.Run(context.Background(), cfg.SummarizerModel, promptText, timeout)
+	resp, err := runner.RunLLM(context.Background(), cfg.SummarizerModel, promptText, timeout)
 	if err != nil {
 		return "", "", 0, err
 	}
 	if resp.IsError {
-		return "", "", 0, fmt.Errorf("claude reported error (subtype=%s): %s", resp.Subtype, resp.Result)
+		return "", "", 0, fmt.Errorf("host reported error (subtype=%s): %s", resp.Subtype, resp.Result)
 	}
 	model := resp.Model
 	if model == "" {
@@ -291,49 +305,48 @@ func invokeSummariser(cfg *state.Config, task string, priorLogs []devlog.Entry,
 	return strings.TrimSpace(resp.Result), model, resp.DurationMS, nil
 }
 
-// classifySummariserError maps a claude.Run error to a DevlogError with
+// classifySummariserError maps a host.RunLLM error to a DevlogError with
 // the SPEC-mandated remediation text so operators see what happened and
 // what to do next.
-func classifySummariserError(err error, errorsLog string) error {
+func classifySummariserError(err error, hostName string, errorsLog string) error {
 	switch {
-	case stderrors.Is(err, claude.ErrCommandNotFound):
-		return derrors.Wrap("flush", "summarizer: claude command not found", err).
+	case stderrors.Is(err, host.ErrCommandNotFound):
+		return derrors.Wrap("flush", fmt.Sprintf("summarizer: %s command not found", hostName), err).
 			WithRemediation(
-				"The 'claude' CLI is not in PATH. DevLog needs it to run the\n" +
-					"summariser and companion models.\n\n" +
-					"Install: https://docs.anthropic.com/en/docs/claude-code\n" +
-					"Or set path: devlog config claude_command /path/to/claude\n\n" +
-					"Full error logged to: " + errorsLog,
+				fmt.Sprintf("The '%s' CLI is not in PATH. DevLog needs it to run the\n"+
+					"summariser and companion models.\n\n"+
+					"Set path: devlog config host_command /path/to/%s\n\n"+
+					"Full error logged to: %s", hostName, hostName, errorsLog),
 			)
-	case stderrors.Is(err, claude.ErrTimeout):
-		return derrors.Wrap("flush", "summarizer: claude process timed out", err).
+	case stderrors.Is(err, host.ErrTimeout):
+		return derrors.Wrap("flush", fmt.Sprintf("summarizer: %s process timed out", hostName), err).
 			WithRemediation(
-				"The Haiku summariser took too long to respond. Buffer preserved —\n" +
+				"The summariser took too long to respond. Buffer preserved —\n" +
 					"will retry on next flush. Run 'devlog flush' to retry manually.\n\n" +
 					"Full error logged to: " + errorsLog,
 			)
-	case stderrors.Is(err, claude.ErrEmptyResponse):
+	case stderrors.Is(err, host.ErrEmptyResponse):
 		return derrors.Wrap("flush", "summarizer returned empty response", err).
 			WithRemediation(
-				"Haiku was invoked but returned no usable summary.\n" +
+				"The summariser was invoked but returned no usable summary.\n" +
 					"Buffer preserved — will retry on next flush.\n" +
 					"To retry now: devlog flush\n" +
 					"To inspect the prompt: devlog flush --dry-run\n\n" +
 					"Full error logged to: " + errorsLog,
 			)
-	case stderrors.Is(err, claude.ErrNonZeroExit):
-		var exitErr *claude.ExitError
+	case stderrors.Is(err, host.ErrNonZeroExit):
+		var exitErr *host.ExitError
 		stderrTxt := ""
 		if stderrors.As(err, &exitErr) {
 			stderrTxt = exitErr.Stderr
 		}
-		remediation := "Check your Claude Code subscription supports the configured model.\n" +
+		remediation := "Check your subscription supports the configured model.\n" +
 			"Buffer preserved — will retry on next flush.\n\n" +
 			"Full error logged to: " + errorsLog
 		if strings.TrimSpace(stderrTxt) != "" {
 			remediation = "stderr: " + strings.TrimSpace(stderrTxt) + "\n\n" + remediation
 		}
-		return derrors.Wrap("flush", "summarizer: claude exited non-zero", err).
+		return derrors.Wrap("flush", fmt.Sprintf("summarizer: %s exited non-zero", hostName), err).
 			WithRemediation(remediation)
 	default:
 		return derrors.Wrap("flush", "summarizer failed", err).

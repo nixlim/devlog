@@ -1,0 +1,9 @@
+{
+    "tool": "edit",
+    "input": {
+        "file_path": "src/api/handler.go",
+        "old_string": "Timeout: 30",
+        "new_string": "Timeout: 60"
+    },
+    "sessionId": "oc-sess-456"
+}

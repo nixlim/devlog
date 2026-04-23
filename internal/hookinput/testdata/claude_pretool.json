@@ -1,0 +1,11 @@
+{
+    "session_id": "sess-abc123",
+    "transcript_path": "/Users/x/.claude/projects/hash/sess.jsonl",
+    "cwd": "/path/to/project",
+    "tool_name": "Edit",
+    "tool_input": {
+        "file_path": "src/api/handler.go",
+        "old_string": "Timeout: 30",
+        "new_string": "Timeout: 60"
+    }
+}

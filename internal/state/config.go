@@ -26,6 +26,8 @@ type Config struct {
 	Enabled                  *bool  `json:"enabled,omitempty"`
 	MaxDiffChars             int    `json:"max_diff_chars"`
 	MaxDetailChars           int    `json:"max_detail_chars"`
+	Host                     string `json:"host"`
+	HostCommand              string `json:"host_command"`
 	ClaudeCommand            string `json:"claude_command"`
 	SummarizerTimeoutSeconds int    `json:"summarizer_timeout_seconds"`
 	CompanionTimeoutSeconds  int    `json:"companion_timeout_seconds"`
@@ -48,6 +50,8 @@ func Default() *Config {
 		Enabled:                  boolPtr(true),
 		MaxDiffChars:             2000,
 		MaxDetailChars:           200,
+		Host:                     "claude",
+		HostCommand:              "claude",
 		ClaudeCommand:            "claude",
 		SummarizerTimeoutSeconds: 60,
 		CompanionTimeoutSeconds:  120,
@@ -90,6 +94,21 @@ func LoadConfig(path string) (*Config, error) {
 					"    rm " + path + "\n",
 			)
 	}
+
+	// Migration: old configs only have claude_command. If host_command is
+	// absent from the file but claude_command is present, mirror the value
+	// so existing installs keep working without manual intervention.
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(data, &raw)
+	_, hasHostCommand := raw["host_command"]
+	_, hasClaudeCommand := raw["claude_command"]
+	if !hasHostCommand && hasClaudeCommand {
+		cfg.HostCommand = cfg.ClaudeCommand
+	}
+	if cfg.Host == "" {
+		cfg.Host = "claude"
+	}
+
 	return cfg, nil
 }
 
@@ -165,7 +184,21 @@ func (c *Config) Validate() error {
 		return devlogerrors.New("config",
 			fmt.Sprintf("companion_timeout_seconds must be > 0 (got %d)", c.CompanionTimeoutSeconds))
 	}
-	if c.ClaudeCommand == "" {
+	if c.Host == "" {
+		return devlogerrors.New("config", "host must not be empty").
+			WithRemediation(
+				"Set host to one of: claude, opencode.\n\n" +
+					"    devlog config host claude\n",
+			)
+	}
+	if c.HostCommand == "" {
+		return devlogerrors.New("config", "host_command must not be empty").
+			WithRemediation(
+				"Set host_command to the path of your host CLI binary:\n\n" +
+					"    devlog config host_command claude\n",
+			)
+	}
+	if c.Host == "claude" && c.ClaudeCommand == "" {
 		return devlogerrors.New("config", "claude_command must not be empty").
 			WithRemediation(
 				"Set claude_command to the path of your claude CLI binary:\n\n" +

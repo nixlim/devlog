@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"devlog/internal/buffer"
-	"devlog/internal/claude"
 	"devlog/internal/devlog"
 	derrors "devlog/internal/errors"
 	"devlog/internal/feedback"
+	"devlog/internal/host"
 	"devlog/internal/prompt"
 	"devlog/internal/state"
 )
@@ -43,7 +43,7 @@ func Companion(args []string) int {
 
 	fs := flag.NewFlagSet("companion", flag.ContinueOnError)
 	fs.SetOutput(stderr())
-	dryRun := fs.Bool("dry-run", false, "build and print the prompt without invoking claude")
+	dryRun := fs.Bool("dry-run", false, "build and print the prompt without invoking the model")
 	projectFlag := fs.String("project", "", "project root (defaults to cwd)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -94,16 +94,25 @@ func Companion(args []string) int {
 	}
 	defer releaseCompanionGuard(statePath)
 
-	runner := claude.New(cfg.ClaudeCommand)
+	runner, ok := host.Lookup(cfg.Host)
+	if !ok {
+		err := fmt.Errorf("no LLM host registered for %q", cfg.Host)
+		recordHookError(filepath.Join(devlogDir, "errors.log"), "companion", err)
+		printErr(derrors.Wrap("companion", "lookup host", err))
+		return 1
+	}
+	if c, ok := runner.(host.Configurable); ok {
+		c.SetCommand(cfg.HostCommand)
+	}
 	timeout := time.Duration(cfg.CompanionTimeoutSeconds) * time.Second
-	resp, runErr := runner.Run(context.Background(), cfg.CompanionModel, promptStr, timeout)
+	resp, runErr := runner.RunLLM(context.Background(), cfg.CompanionModel, promptStr, timeout)
 	if runErr != nil {
-		printCompanionRunError(devlogDir, runErr)
+		printCompanionRunError(devlogDir, cfg.Host, runErr)
 		recordHookError(filepath.Join(devlogDir, "errors.log"), "companion", runErr)
 		return 1
 	}
 	if resp.IsError {
-		isErr := fmt.Errorf("claude reported error (subtype=%s): %s", resp.Subtype, resp.Result)
+		isErr := fmt.Errorf("%s reported error (subtype=%s): %s", cfg.Host, resp.Subtype, resp.Result)
 		recordHookError(filepath.Join(devlogDir, "errors.log"), "companion", isErr)
 		fmt.Fprintf(stderr(), "devlog: error: companion: %v\n", isErr)
 		return 1
@@ -141,7 +150,7 @@ Usage:
     devlog companion [--dry-run] [--project DIR]
 
 Flags:
-    --dry-run     build and print the prompt without invoking claude.
+    --dry-run     build and print the prompt without invoking the model.
     --project     project root (defaults to the current working directory).
 
 Writes feedback.md when the assessment is DRIFTING or SPIRALING. On ON_TRACK
@@ -352,20 +361,19 @@ func parseCompanionResult(result string) (feedback.CompanionResult, error) {
 }
 
 // printCompanionRunError renders a SPEC-style 4-part error to stderr for
-// the specific claude runner failure. The detail of err is also written
+// the specific host runner failure. The detail of err is also written
 // to errors.log by the caller.
-func printCompanionRunError(devlogDir string, err error) {
+func printCompanionRunError(devlogDir string, hostName string, err error) {
 	errLog := filepath.Join(devlogDir, "errors.log")
 	switch {
-	case stderrors.Is(err, claude.ErrCommandNotFound):
+	case stderrors.Is(err, host.ErrCommandNotFound):
 		fmt.Fprintf(stderr(),
-			"devlog: error: companion: claude command not found\n\n"+
-				"The 'claude' CLI is not in PATH. DevLog needs it to run the\n"+
+			"devlog: error: companion: %s command not found\n\n"+
+				"The '%s' CLI is not in PATH. DevLog needs it to run the\n"+
 				"summarizer and companion models.\n\n"+
-				"Install: https://docs.anthropic.com/en/docs/claude-code\n"+
-				"Or set path: devlog config claude_command /path/to/claude\n\n"+
-				"Full error logged to: %s\n", errLog)
-	case stderrors.Is(err, claude.ErrTimeout):
+				"Set path: devlog config host_command /path/to/%s\n\n"+
+				"Full error logged to: %s\n", hostName, hostName, hostName, errLog)
+	case stderrors.Is(err, host.ErrTimeout):
 		fmt.Fprintf(stderr(),
 			"devlog: error: companion: %v\n\n"+
 				"The anti-pattern companion took too long to respond. This can happen with very large\n"+

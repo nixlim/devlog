@@ -133,6 +133,8 @@ func configPairs(cfg *state.Config) map[string]string {
 		"enabled":                    enabled,
 		"max_diff_chars":             strconv.Itoa(cfg.MaxDiffChars),
 		"max_detail_chars":           strconv.Itoa(cfg.MaxDetailChars),
+		"host":                       cfg.Host,
+		"host_command":               cfg.HostCommand,
 		"claude_command":             cfg.ClaudeCommand,
 		"summarizer_timeout_seconds": strconv.Itoa(cfg.SummarizerTimeoutSeconds),
 		"companion_timeout_seconds":  strconv.Itoa(cfg.CompanionTimeoutSeconds),
@@ -167,6 +169,12 @@ func applyConfigValue(cfg *state.Config, key, raw string) error {
 		return nil
 	case "companion_model":
 		cfg.CompanionModel = raw
+		return nil
+	case "host":
+		cfg.Host = raw
+		return nil
+	case "host_command":
+		cfg.HostCommand = raw
 		return nil
 	case "claude_command":
 		cfg.ClaudeCommand = raw

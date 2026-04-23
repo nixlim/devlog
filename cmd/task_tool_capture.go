@@ -11,7 +11,8 @@ import (
 	"time"
 
 	derrors "devlog/internal/errors"
-	"devlog/internal/hook"
+	"devlog/internal/hookinput"
+	"devlog/internal/state"
 )
 
 // TaskToolCapture implements `devlog task-tool-capture` — the PostToolUse
@@ -31,21 +32,47 @@ func TaskToolCapture(args []string) int {
 // taskToolCaptureImpl is the reader-driven core of TaskToolCapture.
 // Split out so tests can feed payloads without hijacking os.Stdin.
 func taskToolCaptureImpl(r io.Reader) int {
-	in, err := hook.ParseInput(r)
+	raw, err := io.ReadAll(r)
 	if err != nil {
 		writeHookErrorBestEffort("task-tool-capture", err, "")
+		return 0
+	}
+
+	// Find cwd before parsing so we can locate .devlog/config.json and
+	// look up the configured host; the host tells us which parser to use.
+	cwd := extractPayloadCwd(raw)
+	if cwd == "" {
+		if wd, wdErr := os.Getwd(); wdErr == nil {
+			cwd = wd
+		}
+	}
+	devlogDir := findDevlogDir(cwd)
+	errorsPath := filepath.Join(devlogDir, "errors.log")
+
+	cfg, err := state.LoadConfig(filepath.Join(devlogDir, "config.json"))
+	if err != nil {
+		_ = derrors.Wrap("task-tool-capture", "load config", err).
+			WriteToLog(errorsPath)
+		return 0
+	}
+
+	ev, err := hookinput.Parse(cfg.Host, "PostToolUse", raw)
+	if err != nil {
+		writeHookErrorBestEffort("task-tool-capture", err, cwd)
 		return 0
 	}
 
 	// Anything that isn't a Task tool is a no-op — no file created, no
 	// log entry. This keeps tasks.jsonl focused on the agent's task
 	// breakdown only.
-	if in.ToolName != "TaskCreate" && in.ToolName != "TaskUpdate" {
+	if ev.ToolName != "TaskCreate" && ev.ToolName != "TaskUpdate" {
 		return 0
 	}
 
-	devlogDir := findDevlogDir(in.Cwd)
-	errorsPath := filepath.Join(devlogDir, "errors.log")
+	if ev.Cwd != "" {
+		devlogDir = findDevlogDir(ev.Cwd)
+		errorsPath = filepath.Join(devlogDir, "errors.log")
+	}
 	tasksPath := filepath.Join(devlogDir, "tasks.jsonl")
 
 	entry := struct {
@@ -54,8 +81,8 @@ func taskToolCaptureImpl(r io.Reader) int {
 		ToolInput json.RawMessage `json:"tool_input"`
 	}{
 		TS:        time.Now().UTC().Format(time.RFC3339),
-		Tool:      in.ToolName,
-		ToolInput: in.RawToolInput,
+		Tool:      ev.ToolName,
+		ToolInput: ev.RawToolInput,
 	}
 	if len(entry.ToolInput) == 0 {
 		entry.ToolInput = json.RawMessage("null")

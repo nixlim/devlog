@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+
+	"devlog/internal/state"
 )
 
 // readSettings loads and JSON-decodes path; fails the test on any error.
@@ -66,7 +70,7 @@ func TestInstallCreatesFileWhenMissing(t *testing.T) {
 	settingsPath := filepath.Join(root, "nested", "sub", "settings.json")
 
 	withStreams(t)
-	code := Install([]string{"--settings", settingsPath})
+	code := Install([]string{"--host", "claude", "--project", root, "--settings", settingsPath})
 	if code != 0 {
 		t.Fatalf("Install exit = %d, want 0", code)
 	}
@@ -91,13 +95,13 @@ func TestInstallIsIdempotent(t *testing.T) {
 	settingsPath := filepath.Join(root, "settings.json")
 
 	withStreams(t)
-	if code := Install([]string{"--settings", settingsPath}); code != 0 {
+	if code := Install([]string{"--host", "claude", "--project", root, "--settings", settingsPath}); code != 0 {
 		t.Fatalf("first install exit = %d", code)
 	}
 	first := readSettings(t, settingsPath)
 
 	withStreams(t)
-	if code := Install([]string{"--settings", settingsPath}); code != 0 {
+	if code := Install([]string{"--host", "claude", "--project", root, "--settings", settingsPath}); code != 0 {
 		t.Fatalf("second install exit = %d", code)
 	}
 	second := readSettings(t, settingsPath)
@@ -151,7 +155,7 @@ func TestInstallPreservesExistingUnrelatedHooks(t *testing.T) {
 	}
 
 	withStreams(t)
-	if code := Install([]string{"--settings", settingsPath}); code != 0 {
+	if code := Install([]string{"--host", "claude", "--project", root, "--settings", settingsPath}); code != 0 {
 		t.Fatalf("Install exit = %d", code)
 	}
 
@@ -196,7 +200,7 @@ func TestInstallRespectsEnvVar(t *testing.T) {
 	t.Setenv("HOME", root)
 
 	withStreams(t)
-	if code := Install(nil); code != 0 {
+	if code := Install([]string{"--host", "claude", "--project", root}); code != 0 {
 		t.Fatalf("Install exit = %d", code)
 	}
 	if _, err := os.Stat(settingsPath); err != nil {
@@ -211,7 +215,7 @@ func TestInstallFlagBeatsEnvVar(t *testing.T) {
 	t.Setenv("CLAUDE_SETTINGS_PATH", envPath)
 
 	withStreams(t)
-	if code := Install([]string{"--settings", flagPath}); code != 0 {
+	if code := Install([]string{"--host", "claude", "--project", root, "--settings", flagPath}); code != 0 {
 		t.Fatalf("Install exit = %d", code)
 	}
 
@@ -231,7 +235,7 @@ func TestInstallRejectsCorruptSettings(t *testing.T) {
 	}
 
 	withStreams(t)
-	code := Install([]string{"--settings", settingsPath})
+	code := Install([]string{"--host", "claude", "--project", root, "--settings", settingsPath})
 	if code == 0 {
 		t.Error("Install should fail on corrupt JSON")
 	}
@@ -252,7 +256,7 @@ func TestInstallRejectsNonObjectHooks(t *testing.T) {
 	}
 
 	withStreams(t)
-	code := Install([]string{"--settings", settingsPath})
+	code := Install([]string{"--host", "claude", "--project", root, "--settings", settingsPath})
 	if code == 0 {
 		t.Error("Install should fail when hooks is not an object")
 	}
@@ -271,7 +275,7 @@ func TestInstallWritesCorrectClaudeCodeSchema(t *testing.T) {
 	settingsPath := filepath.Join(root, "settings.json")
 
 	withStreams(t)
-	if code := Install([]string{"--settings", settingsPath}); code != 0 {
+	if code := Install([]string{"--host", "claude", "--project", root, "--settings", settingsPath}); code != 0 {
 		t.Fatalf("Install exit = %d, want 0", code)
 	}
 
@@ -326,6 +330,180 @@ func TestInstallWritesCorrectClaudeCodeSchema(t *testing.T) {
 	}
 }
 
+// writeFakeBinary creates a trivial executable in dir named `name` that
+// prints "v1.0.0\n" and exits 0. Tests point PATH at dir to make the
+// host.Detect() lookup succeed without a real binary.
+func writeFakeBinary(t *testing.T, dir, name string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake-binary technique is posix-only")
+	}
+	path := filepath.Join(dir, name)
+	script := "#!/bin/sh\necho v1.0.0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func readInstalledConfig(t *testing.T, projectRoot string) *state.Config {
+	t.Helper()
+	cfg, err := state.LoadConfig(filepath.Join(projectRoot, ".devlog", "config.json"))
+	if err != nil {
+		t.Fatalf("load installed config: %v", err)
+	}
+	return cfg
+}
+
+func TestInstallAutoDetectClaudeOnly(t *testing.T) {
+	root := t.TempDir()
+	binDir := t.TempDir()
+	writeFakeBinary(t, binDir, "claude")
+	t.Setenv("PATH", binDir)
+
+	settingsPath := filepath.Join(root, "settings.json")
+	stdoutBuf, _ := withStreams(t)
+	if code := Install([]string{"--project", root, "--settings", settingsPath}); code != 0 {
+		t.Fatalf("Install exit = %d, want 0", code)
+	}
+	if !strings.Contains(stdoutBuf.String(), "detected claude") {
+		t.Errorf("stdout should report auto-detected claude: %q", stdoutBuf.String())
+	}
+	cfg := readInstalledConfig(t, root)
+	if cfg.Host != "claude" {
+		t.Errorf("config.Host = %q, want claude", cfg.Host)
+	}
+}
+
+func TestInstallAutoDetectOpenCodeOnly(t *testing.T) {
+	root := t.TempDir()
+	binDir := t.TempDir()
+	writeFakeBinary(t, binDir, "opencode")
+	t.Setenv("PATH", binDir)
+
+	stdoutBuf, _ := withStreams(t)
+	if code := Install([]string{
+		"--project", root,
+		"--plugin-dir", filepath.Join(root, "plugins"),
+		"--opencode-config", filepath.Join(root, "opencode.json"),
+	}); code != 0 {
+		t.Fatalf("Install exit = %d, want 0", code)
+	}
+	if !strings.Contains(stdoutBuf.String(), "detected opencode") {
+		t.Errorf("stdout should report auto-detected opencode: %q", stdoutBuf.String())
+	}
+	cfg := readInstalledConfig(t, root)
+	if cfg.Host != "opencode" {
+		t.Errorf("config.Host = %q, want opencode", cfg.Host)
+	}
+	// Plugin file written.
+	if _, err := os.Stat(filepath.Join(root, "plugins", "devlog.ts")); err != nil {
+		t.Errorf("plugin file missing: %v", err)
+	}
+}
+
+func TestInstallBothDetectedPrefersClaude(t *testing.T) {
+	root := t.TempDir()
+	binDir := t.TempDir()
+	writeFakeBinary(t, binDir, "claude")
+	writeFakeBinary(t, binDir, "opencode")
+	t.Setenv("PATH", binDir)
+
+	settingsPath := filepath.Join(root, "settings.json")
+	stdoutBuf, _ := withStreams(t)
+	if code := Install([]string{"--project", root, "--settings", settingsPath}); code != 0 {
+		t.Fatalf("Install exit = %d, want 0", code)
+	}
+	out := stdoutBuf.String()
+	if !strings.Contains(out, "detected both") {
+		t.Errorf("stdout should mention both hosts detected: %q", out)
+	}
+	if !strings.Contains(out, "--host opencode") {
+		t.Errorf("stdout should hint at --host opencode: %q", out)
+	}
+	cfg := readInstalledConfig(t, root)
+	if cfg.Host != "claude" {
+		t.Errorf("config.Host = %q, want claude (backward-compat default)", cfg.Host)
+	}
+}
+
+func TestInstallNeitherDetected(t *testing.T) {
+	root := t.TempDir()
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir) // empty dir — nothing to detect
+
+	_, stderrBuf := withStreams(t)
+	code := Install([]string{"--project", root, "--settings", filepath.Join(root, "settings.json")})
+	if code == 0 {
+		t.Fatalf("Install should fail when no host is detected")
+	}
+	errOut := stderrBuf.String()
+	for _, want := range []string{"Claude Code", "OpenCode", "--host"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr missing %q: %q", want, errOut)
+		}
+	}
+}
+
+func TestInstallFlagsPersistModelOverrides(t *testing.T) {
+	root := t.TempDir()
+	settingsPath := filepath.Join(root, "settings.json")
+	withStreams(t)
+	code := Install([]string{
+		"--host", "claude",
+		"--project", root,
+		"--settings", settingsPath,
+		"--summarizer-model", "claude-haiku-test",
+		"--companion-model", "claude-sonnet-test",
+		"--host-command", "/opt/bin/claude",
+	})
+	if code != 0 {
+		t.Fatalf("Install exit = %d", code)
+	}
+	cfg := readInstalledConfig(t, root)
+	if cfg.SummarizerModel != "claude-haiku-test" {
+		t.Errorf("SummarizerModel = %q, want claude-haiku-test", cfg.SummarizerModel)
+	}
+	if cfg.CompanionModel != "claude-sonnet-test" {
+		t.Errorf("CompanionModel = %q, want claude-sonnet-test", cfg.CompanionModel)
+	}
+	if cfg.HostCommand != "/opt/bin/claude" {
+		t.Errorf("HostCommand = %q, want /opt/bin/claude", cfg.HostCommand)
+	}
+}
+
+func TestInstallClaudeCommandAlias(t *testing.T) {
+	// --claude-command is a deprecated alias for --host-command. Providing
+	// only --claude-command should populate HostCommand.
+	root := t.TempDir()
+	settingsPath := filepath.Join(root, "settings.json")
+	withStreams(t)
+	code := Install([]string{
+		"--host", "claude",
+		"--project", root,
+		"--settings", settingsPath,
+		"--claude-command", "/usr/local/bin/claude",
+	})
+	if code != 0 {
+		t.Fatalf("Install exit = %d", code)
+	}
+	cfg := readInstalledConfig(t, root)
+	if cfg.HostCommand != "/usr/local/bin/claude" {
+		t.Errorf("HostCommand = %q, want the --claude-command value", cfg.HostCommand)
+	}
+}
+
+func TestInstallUnknownHostRejected(t *testing.T) {
+	root := t.TempDir()
+	_, stderrBuf := withStreams(t)
+	code := Install([]string{"--host", "bogus", "--project", root})
+	if code == 0 {
+		t.Fatal("Install should reject unknown host")
+	}
+	if !strings.Contains(stderrBuf.String(), "bogus") {
+		t.Errorf("stderr should mention the bad host name: %q", stderrBuf.String())
+	}
+}
+
 func TestInstallEmptyFileTreatedAsEmptyObject(t *testing.T) {
 	root := t.TempDir()
 	settingsPath := filepath.Join(root, "settings.json")
@@ -334,7 +512,7 @@ func TestInstallEmptyFileTreatedAsEmptyObject(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	withStreams(t)
-	if code := Install([]string{"--settings", settingsPath}); code != 0 {
+	if code := Install([]string{"--host", "claude", "--project", root, "--settings", settingsPath}); code != 0 {
 		t.Errorf("empty-file install exit = %d, want 0", code)
 	}
 	s := readSettings(t, settingsPath)

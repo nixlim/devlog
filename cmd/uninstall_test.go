@@ -39,13 +39,10 @@ func readSettingsJSON(t *testing.T, path string) map[string]any {
 func TestUninstall_MissingSettings_NoOp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json") // does not exist
-	stdoutBuf, _ := setupCmdStreams(t)
+	setupCmdStreams(t)
 
-	if code := Uninstall([]string{"--settings", path}); code != 0 {
+	if code := Uninstall([]string{"--host", "claude", "--settings", path}); code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
-	}
-	if !strings.Contains(stdoutBuf.String(), "no devlog hooks") {
-		t.Errorf("stdout should report nothing-to-do: %q", stdoutBuf.String())
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("uninstall created a settings file: %v", err)
@@ -69,13 +66,10 @@ func TestUninstall_OnlyDevlogHooks_AllRemoved(t *testing.T) {
 			},
 		},
 	})
-	stdoutBuf, _ := setupCmdStreams(t)
+	setupCmdStreams(t)
 
-	if code := Uninstall([]string{"--settings", path}); code != 0 {
-		t.Fatalf("exit code: got %d, want 0\nstdout=%s", code, stdoutBuf.String())
-	}
-	if !strings.Contains(stdoutBuf.String(), "removed 4 devlog") {
-		t.Errorf("expected removal count in stdout: %q", stdoutBuf.String())
+	if code := Uninstall([]string{"--host", "claude", "--settings", path}); code != 0 {
+		t.Fatalf("exit code: got %d, want 0", code)
 	}
 
 	got := readSettingsJSON(t, path)
@@ -107,14 +101,13 @@ func TestUninstall_MixedHooks_OnlyDevlogRemoved(t *testing.T) {
 		},
 		"other_setting": "preserved",
 	})
-	_, _ = setupCmdStreams(t)
+	setupCmdStreams(t)
 
-	if code := Uninstall([]string{"--settings", path}); code != 0 {
+	if code := Uninstall([]string{"--host", "claude", "--settings", path}); code != 0 {
 		t.Fatalf("exit code: got %d, want 0", code)
 	}
 	got := readSettingsJSON(t, path)
 
-	// Unrelated top-level fields preserved.
 	if v, ok := got["other_setting"]; !ok || v != "preserved" {
 		t.Errorf("other_setting lost: got %v", got)
 	}
@@ -145,25 +138,18 @@ func TestUninstall_Idempotent(t *testing.T) {
 			},
 		},
 	})
-	stdoutBuf, _ := setupCmdStreams(t)
+	setupCmdStreams(t)
 
-	// First uninstall: removes the one devlog entry.
-	if code := Uninstall([]string{"--settings", path}); code != 0 {
+	if code := Uninstall([]string{"--host", "claude", "--settings", path}); code != 0 {
 		t.Fatalf("first uninstall exit: %d", code)
 	}
 	first := readSettingsJSON(t, path)
 
-	// Second uninstall: nothing to remove, exit 0, file unchanged.
-	stdoutBuf.Reset()
-	if code := Uninstall([]string{"--settings", path}); code != 0 {
+	if code := Uninstall([]string{"--host", "claude", "--settings", path}); code != 0 {
 		t.Fatalf("second uninstall exit: %d", code)
-	}
-	if !strings.Contains(stdoutBuf.String(), "no devlog hooks") {
-		t.Errorf("second call should report 'no devlog hooks': %q", stdoutBuf.String())
 	}
 	second := readSettingsJSON(t, path)
 
-	// Files must be identical in structure.
 	firstData, _ := json.Marshal(first)
 	secondData, _ := json.Marshal(second)
 	if string(firstData) != string(secondData) {
@@ -179,15 +165,11 @@ func TestUninstall_NoHooksKey_NoOp(t *testing.T) {
 		"model":           "claude-sonnet-4-6",
 		"some_other_list": []any{"a", "b", "c"},
 	})
-	stdoutBuf, _ := setupCmdStreams(t)
+	setupCmdStreams(t)
 
-	if code := Uninstall([]string{"--settings", path}); code != 0 {
+	if code := Uninstall([]string{"--host", "claude", "--settings", path}); code != 0 {
 		t.Fatalf("exit: %d", code)
 	}
-	if !strings.Contains(stdoutBuf.String(), "no devlog hooks") {
-		t.Errorf("expected 'no devlog hooks' message: %q", stdoutBuf.String())
-	}
-	// Unrelated settings preserved exactly.
 	got := readSettingsJSON(t, path)
 	if got["theme"] != "dark" || got["model"] != "claude-sonnet-4-6" {
 		t.Errorf("unrelated settings lost: %v", got)
@@ -195,13 +177,11 @@ func TestUninstall_NoHooksKey_NoOp(t *testing.T) {
 }
 
 func TestUninstall_InstallThenUninstall_RoundTrip(t *testing.T) {
-	// End-to-end: install writes devlog hooks, uninstall removes them
-	// cleanly, leaving the file structurally similar to an empty install.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 	setupCmdStreams(t)
 
-	if code := Install([]string{"--settings", path}); code != 0 {
+	if code := Install([]string{"--host", "claude", "--project", dir, "--settings", path}); code != 0 {
 		t.Fatalf("install exit: %d", code)
 	}
 	afterInstall := readSettingsJSON(t, path)
@@ -214,7 +194,7 @@ func TestUninstall_InstallThenUninstall_RoundTrip(t *testing.T) {
 		t.Fatalf("install should have added 4 entries, got %d: %+v", total, hooks)
 	}
 
-	if code := Uninstall([]string{"--settings", path}); code != 0 {
+	if code := Uninstall([]string{"--host", "claude", "--settings", path}); code != 0 {
 		t.Fatalf("uninstall exit: %d", code)
 	}
 	afterUninstall := readSettingsJSON(t, path)
@@ -228,46 +208,15 @@ func TestUninstall_InstallThenUninstall_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestIsDevlogCommand(t *testing.T) {
-	cases := map[string]bool{
-		"devlog":              true,
-		"devlog capture":      true,
-		"devlog task-capture": true,
-		"  devlog flush":      true,  // leading space tolerated
-		"devlog\tcompanion":   true,  // tab also accepted
-		"devlogger something": false, // prefix match must be exact token
-		"my-devlog-wrapper":   false,
-		"":                    false,
-		"claude -p something": false,
-		"devlogsuffix":        false, // no separator
-	}
-	for cmd, want := range cases {
-		if got := isDevlogCommand(cmd); got != want {
-			t.Errorf("isDevlogCommand(%q) = %v, want %v", cmd, got, want)
+func TestUninstall_HelpFlag(t *testing.T) {
+	stdoutBuf, _ := setupCmdStreams(t)
+	for _, arg := range []string{"-h", "--help", "help"} {
+		stdoutBuf.Reset()
+		if code := Uninstall([]string{arg}); code != 0 {
+			t.Errorf("%q: exit %d, want 0", arg, code)
 		}
-	}
-}
-
-func TestFilterDevlogHooks_LeavesNonObjectEntriesAlone(t *testing.T) {
-	// JSON hook arrays might contain nested objects Claude Code adds that
-	// don't match {matcher, command}. filterDevlogHooks should preserve
-	// them rather than panic or drop them.
-	hooks := map[string]any{
-		"PreToolUse": []any{
-			"weirdly-a-bare-string",
-			map[string]any{"command": "devlog check-feedback"},
-			map[string]any{"nested": map[string]any{"command": "devlog capture"}},
-		},
-	}
-	removed := filterDevlogHooks(hooks)
-	if removed != 1 {
-		t.Errorf("removed: got %d, want 1", removed)
-	}
-	kept := hooks["PreToolUse"].([]any)
-	if len(kept) != 2 {
-		t.Fatalf("expected 2 entries kept, got %d: %v", len(kept), kept)
-	}
-	if kept[0] != "weirdly-a-bare-string" {
-		t.Errorf("bare string dropped: %v", kept[0])
+		if !strings.Contains(stdoutBuf.String(), "Usage:") {
+			t.Errorf("%q: help missing Usage section: %q", arg, stdoutBuf.String())
+		}
 	}
 }

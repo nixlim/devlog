@@ -28,6 +28,8 @@ func TestDefaultMatchesSpec(t *testing.T) {
 		{"MaxDiffChars", cfg.MaxDiffChars, 2000},
 		{"MaxDetailChars", cfg.MaxDetailChars, 200},
 		{"ClaudeCommand", cfg.ClaudeCommand, "claude"},
+		{"Host", cfg.Host, "claude"},
+		{"HostCommand", cfg.HostCommand, "claude"},
 		{"SummarizerTimeoutSeconds", cfg.SummarizerTimeoutSeconds, 60},
 		{"CompanionTimeoutSeconds", cfg.CompanionTimeoutSeconds, 120},
 	}
@@ -146,6 +148,8 @@ func TestSaveConfigRoundTrip(t *testing.T) {
 	cfg := Default()
 	cfg.BufferSize = 7
 	cfg.ClaudeCommand = "/usr/local/bin/claude"
+	cfg.Host = "opencode"
+	cfg.HostCommand = "/usr/local/bin/opencode"
 
 	if err := SaveConfig(path, cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
@@ -156,6 +160,12 @@ func TestSaveConfigRoundTrip(t *testing.T) {
 	}
 	if got.BufferSize != 7 || got.ClaudeCommand != "/usr/local/bin/claude" {
 		t.Errorf("round trip lost overrides: %+v", got)
+	}
+	if got.Host != "opencode" {
+		t.Errorf("Host = %q, want opencode", got.Host)
+	}
+	if got.HostCommand != "/usr/local/bin/opencode" {
+		t.Errorf("HostCommand = %q, want /usr/local/bin/opencode", got.HostCommand)
 	}
 	if !got.IsEnabled() {
 		t.Errorf("round trip flipped enabled to false")

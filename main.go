@@ -29,8 +29,8 @@ var commands = []command{
 	{"log", "Print the dev log narrative (human-readable)", cmd.Log},
 	{"reset", "Clear all state for a fresh session", cmd.Reset},
 	{"config", "Get/set tunable parameters", cmd.Config},
-	{"install", "Install hooks into Claude Code settings.json", cmd.Install},
-	{"uninstall", "Remove hooks from Claude Code settings.json", cmd.Uninstall},
+	{"install", "Install hooks for the configured host backend", cmd.Install},
+	{"uninstall", "Remove hooks for the configured host backend", cmd.Uninstall},
 }
 
 func main() {
@@ -63,7 +63,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "devlog — death-spiral prevention system for Claude Code")
+	fmt.Fprintln(w, "devlog — death-spiral prevention system for AI coding agents")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "    devlog <command> [args...]")

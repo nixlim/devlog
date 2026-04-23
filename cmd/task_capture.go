@@ -3,13 +3,15 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	derrors "devlog/internal/errors"
-	"devlog/internal/hook"
+	"devlog/internal/hookinput"
+	"devlog/internal/state"
 )
 
 // taskCaptureStdin is the reader task-capture reads from. Exposed as a
@@ -32,16 +34,40 @@ func TaskCapture(args []string) int {
 	cwd, _ := os.Getwd()
 	errorsLog := filepath.Join(cwd, ".devlog", "errors.log")
 
-	in, err := hook.ParseInput(taskCaptureStdin())
+	raw, err := io.ReadAll(taskCaptureStdin())
 	if err != nil {
 		logNonFatal(errorsLog, err)
 		return 0
 	}
 
-	devlogDir := resolveDevlogDir(in.Cwd)
+	// Extract cwd from the payload so we can locate .devlog/config.json
+	// and look up the host before parsing the host-specific payload.
+	if payloadCwd := extractPayloadCwd(raw); payloadCwd != "" {
+		cwd = payloadCwd
+	}
+	devlogDir := resolveDevlogDir(cwd)
 	errorsLog = filepath.Join(devlogDir, "errors.log")
 
-	if strings.TrimSpace(in.Prompt) == "" {
+	cfg, err := state.LoadConfig(filepath.Join(devlogDir, "config.json"))
+	if err != nil {
+		logNonFatal(errorsLog, err)
+		return 0
+	}
+
+	ev, err := hookinput.Parse(cfg.Host, "UserPromptSubmit", raw)
+	if err != nil {
+		logNonFatal(errorsLog, err)
+		return 0
+	}
+	if ev.Cwd != "" {
+		// Re-resolve in case the host parser surfaced a different cwd
+		// (rare, but keeps .devlog lookup consistent with downstream
+		// consumers of the event).
+		devlogDir = resolveDevlogDir(ev.Cwd)
+		errorsLog = filepath.Join(devlogDir, "errors.log")
+	}
+
+	if strings.TrimSpace(ev.Prompt) == "" {
 		logNonFatal(errorsLog,
 			derrors.New("task-capture", "received UserPromptSubmit payload without a prompt field"))
 		return 0
@@ -63,14 +89,14 @@ func TaskCapture(args []string) int {
 			fmt.Sprintf("stat %s", taskPath), err))
 		return 0
 	} else if !exists {
-		if err := writeTaskFile(taskPath, in.Prompt); err != nil {
+		if err := writeTaskFile(taskPath, ev.Prompt); err != nil {
 			logNonFatal(errorsLog, err)
 			return 0
 		}
 		return 0
 	}
 
-	if err := appendTaskUpdate(devlogDir, in); err != nil {
+	if err := appendTaskUpdate(devlogDir, ev); err != nil {
 		logNonFatal(errorsLog, err)
 		return 0
 	}
@@ -160,12 +186,12 @@ type taskUpdateEntry struct {
 // appendTaskUpdate appends one JSONL entry representing the new user
 // prompt to task_updates.jsonl in devlogDir. Uses O_APPEND so concurrent
 // writers don't interleave lines on POSIX filesystems.
-func appendTaskUpdate(devlogDir string, in *hook.Input) error {
+func appendTaskUpdate(devlogDir string, ev *hookinput.Event) error {
 	path := filepath.Join(devlogDir, "task_updates.jsonl")
 	entry := taskUpdateEntry{
 		TS:        time.Now().UTC().Format(time.RFC3339Nano),
-		SessionID: in.SessionID,
-		Prompt:    in.Prompt,
+		SessionID: ev.SessionID,
+		Prompt:    ev.Prompt,
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {

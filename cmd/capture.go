@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +16,7 @@ import (
 	"devlog/internal/buffer"
 	derrors "devlog/internal/errors"
 	"devlog/internal/git"
-	"devlog/internal/hook"
+	"devlog/internal/hookinput"
 	"devlog/internal/state"
 )
 
@@ -48,13 +50,21 @@ func Capture(args []string) int {
 	cwd, _ := os.Getwd()
 	errorsLog := filepath.Join(cwd, ".devlog", "errors.log")
 
-	in, err := hook.ParseInput(captureStdin())
+	raw, err := io.ReadAll(captureStdin())
 	if err != nil {
 		captureLogNonFatal(errorsLog, err)
 		return 0
 	}
 
-	devlogDir := resolveDevlogDir(in.Cwd)
+	// Extract cwd from the payload before we know which host sent it —
+	// both Claude and OpenCode envelopes carry a top-level "cwd" field,
+	// and we need it to find .devlog/config.json (which is what tells us
+	// the host).
+	payloadCwd := extractPayloadCwd(raw)
+	if payloadCwd != "" {
+		cwd = payloadCwd
+	}
+	devlogDir := resolveDevlogDir(cwd)
 	errorsLog = filepath.Join(devlogDir, "errors.log")
 
 	cfg, err := state.LoadConfig(filepath.Join(devlogDir, "config.json"))
@@ -66,7 +76,18 @@ func Capture(args []string) int {
 		return 0
 	}
 
-	entry, err := buildBufferEntry(in, cfg)
+	ev, err := hookinput.Parse(cfg.Host, "PostToolUse", raw)
+	if err != nil {
+		captureLogNonFatal(errorsLog, err)
+		return 0
+	}
+	// Prefer the parsed event's cwd when the host surfaced one; keeps
+	// the rest of the command working with a single source of truth.
+	if ev.Cwd != "" {
+		cwd = ev.Cwd
+	}
+
+	entry, err := buildBufferEntry(ev, cwd, cfg)
 	if err != nil {
 		captureLogNonFatal(errorsLog, err)
 		return 0
@@ -109,7 +130,7 @@ func Capture(args []string) int {
 	}
 
 	if shouldFlush {
-		if err := captureFlushSpawner(in.Cwd); err != nil {
+		if err := captureFlushSpawner(cwd); err != nil {
 			captureLogNonFatal(errorsLog, derrors.Wrap("capture", "spawn flush", err))
 			// Roll back the FlushInProgress flag so the next capture can
 			// retry. Losing a BufferCount reset is fine — the next
@@ -123,36 +144,37 @@ func Capture(args []string) int {
 	return 0
 }
 
-// buildBufferEntry maps a hook Input into a buffer.Entry. Returns
+// buildBufferEntry maps a hookinput Event into a buffer.Entry. cwd is
+// the project root used by Bash entries to run `git diff`. Returns
 // (nil, nil) for tools we ignore so the caller can short-circuit without
 // special-casing.
-func buildBufferEntry(in *hook.Input, cfg *state.Config) (*buffer.Entry, error) {
+func buildBufferEntry(ev *hookinput.Event, cwd string, cfg *state.Config) (*buffer.Entry, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
-	switch in.ToolName {
+	switch ev.ToolName {
 	case "Edit":
 		return &buffer.Entry{
 			TS:        now,
 			Tool:      "Edit",
-			File:      in.ToolInput.FilePath,
-			Detail:    summarizeEdit(in.ToolInput.OldString, in.ToolInput.NewString, cfg.MaxDetailChars),
-			DiffLines: editDiffLines(in.ToolInput.OldString, in.ToolInput.NewString),
+			File:      ev.ToolInput.FilePath,
+			Detail:    summarizeEdit(ev.ToolInput.OldString, ev.ToolInput.NewString, cfg.MaxDetailChars),
+			DiffLines: editDiffLines(ev.ToolInput.OldString, ev.ToolInput.NewString),
 			Changed:   true,
 		}, nil
 
 	case "Write":
-		content := in.ToolInput.Content
+		content := ev.ToolInput.Content
 		return &buffer.Entry{
 			TS:        now,
 			Tool:      "Write",
-			File:      in.ToolInput.FilePath,
+			File:      ev.ToolInput.FilePath,
 			Detail:    fmt.Sprintf("wrote %d bytes", len(content)),
 			DiffLines: strings.Count(content, "\n"),
 			Changed:   true,
 		}, nil
 
 	case "Bash":
-		return buildBashEntry(in, cfg, now)
+		return buildBashEntry(ev, cwd, cfg, now)
 
 	default:
 		return nil, nil
@@ -187,14 +209,14 @@ func editDiffLines(oldStr, newStr string) int {
 // command with Changed=false. git errors are surfaced as DevlogErrors so
 // the caller can log them once — the buffer entry is still returned so
 // the agent's action is visible in the trajectory.
-func buildBashEntry(in *hook.Input, cfg *state.Config, now string) (*buffer.Entry, error) {
+func buildBashEntry(ev *hookinput.Event, cwd string, cfg *state.Config, now string) (*buffer.Entry, error) {
 	entry := &buffer.Entry{
 		TS:     now,
 		Tool:   "Bash",
-		Detail: truncateRunes(flattenWS(in.ToolInput.Command), cfg.MaxDetailChars),
+		Detail: truncateRunes(flattenWS(ev.ToolInput.Command), cfg.MaxDetailChars),
 	}
 
-	stat, err := git.DiffStat(in.Cwd)
+	stat, err := git.DiffStat(cwd)
 	if err != nil {
 		// Non-fatal: surface the diff failure but still record the
 		// command so the trajectory reflects what the agent tried.
@@ -209,7 +231,7 @@ func buildBashEntry(in *hook.Input, cfg *state.Config, now string) (*buffer.Entr
 		return entry, nil
 	}
 
-	diffOut, diffErr := git.Diff(in.Cwd, cfg.MaxDiffChars)
+	diffOut, diffErr := git.Diff(cwd, cfg.MaxDiffChars)
 	entry.Changed = true
 	if diffErr != nil {
 		// Same treatment — keep the command, report the diff failure.
@@ -248,6 +270,19 @@ func flattenWS(s string) string {
 	return strings.Join(strings.FieldsFunc(s, func(r rune) bool {
 		return r == '\n' || r == '\r' || r == '\t'
 	}), " ")
+}
+
+// extractPayloadCwd reads a best-effort top-level "cwd" field from a
+// hook payload. Both Claude and OpenCode envelopes carry this field, so
+// we can locate .devlog/config.json before we know which host parser to
+// use. Missing or malformed payloads yield "" and the caller falls back
+// to the process working directory.
+func extractPayloadCwd(raw []byte) string {
+	var probe struct {
+		Cwd string `json:"cwd"`
+	}
+	_ = json.Unmarshal(raw, &probe)
+	return probe.Cwd
 }
 
 // captureLogNonFatal writes err to errorsLogPath with the "capture"

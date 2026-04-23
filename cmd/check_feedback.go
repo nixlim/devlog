@@ -3,6 +3,7 @@ package cmd
 import (
 	stderrors "errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -30,9 +31,8 @@ func CheckFeedback(args []string) int {
 		return 0
 	}
 
-	devlogDir := resolveDevlogDirSilent()
+	devlogDir := resolveDevlogDirFromStdin()
 	if devlogDir == "" {
-		// Working directory unreadable. Nothing we can reasonably do.
 		return 0
 	}
 
@@ -64,16 +64,25 @@ context), archived to .devlog/feedback_archive.jsonl, and truncated.
 All errors are silent — this command never blocks the working agent.
 `
 
-// resolveDevlogDirSilent returns the .devlog directory for the current
-// working directory, or "" when the cwd itself cannot be read. Unlike the
-// init path, this never surfaces an error to the caller — the PreToolUse
-// hook must remain non-fatal.
-func resolveDevlogDirSilent() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return ""
+// checkFeedbackStdin is indirected so tests can inject payloads.
+var checkFeedbackStdin = func() *os.File { return os.Stdin }
+
+// resolveDevlogDirFromStdin reads the hook's stdin payload to extract a
+// cwd field (injected by the OpenCode TS plugin). Falls back to the
+// process working directory when the payload is absent or missing the
+// field — this is the normal path for Claude Code, which pipes a payload
+// but cwd comes from the process environment.
+func resolveDevlogDirFromStdin() string {
+	raw, _ := io.ReadAll(checkFeedbackStdin())
+	cwd := extractPayloadCwd(raw)
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
 	}
-	return findDevlogDir(wd)
+	return findDevlogDir(cwd)
 }
 
 // recordHookError appends a structured error line to logPath. The errors

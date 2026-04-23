@@ -12,23 +12,23 @@ import (
 	"time"
 
 	"devlog/internal/buffer"
-	"devlog/internal/claude"
 	"devlog/internal/devlog"
+	"devlog/internal/host"
 	"devlog/internal/state"
 )
 
-// stubRunner implements claudeRunnerIface with a scripted response.
+// stubRunner implements llmRunner with a scripted response.
 type stubRunner struct {
 	model      string
 	prompt     string
 	calls      int32
 	wantCalled int
 
-	response *claude.Response
+	response *host.Response
 	err      error
 }
 
-func (s *stubRunner) Run(ctx context.Context, model, promptText string, timeout time.Duration) (*claude.Response, error) {
+func (s *stubRunner) RunLLM(ctx context.Context, model, promptText string, timeout time.Duration) (*host.Response, error) {
 	atomic.AddInt32(&s.calls, 1)
 	s.model = model
 	s.prompt = promptText
@@ -40,9 +40,9 @@ func (s *stubRunner) Run(ctx context.Context, model, promptText string, timeout 
 
 func withRunner(t *testing.T, r *stubRunner) {
 	t.Helper()
-	prev := flushClaudeRunner
-	flushClaudeRunner = func(_ *state.Config) claudeRunnerIface { return r }
-	t.Cleanup(func() { flushClaudeRunner = prev })
+	prev := flushLLMRunner
+	flushLLMRunner = func(_ *state.Config) llmRunner { return r }
+	t.Cleanup(func() { flushLLMRunner = prev })
 }
 
 // spawnRecorder replaces flushCompanionSpawner and records invocations.
@@ -145,7 +145,7 @@ func TestFlushSummarisesBufferAndArchives(t *testing.T) {
 	fixedFlushTime(t, time.Date(2026, 4, 22, 22, 15, 30, 0, time.UTC))
 
 	runner := &stubRunner{
-		response: &claude.Response{
+		response: &host.Response{
 			Type:       "result",
 			Subtype:    "success",
 			Result:     "  Tweaking database timeouts to chase a 500 error.  ",
@@ -262,7 +262,7 @@ func TestFlushProceedsWhenGuardPreSet(t *testing.T) {
 	})
 
 	runner := &stubRunner{
-		response: &claude.Response{
+		response: &host.Response{
 			Type:       "result",
 			Result:     "proceeded through pre-set guard",
 			Model:      "claude-haiku-4-5-20251001",
@@ -295,7 +295,7 @@ func TestFlushProceedsWhenGuardPreSet(t *testing.T) {
 
 func TestFlushSummariserFailurePreservesBuffer(t *testing.T) {
 	root := seedFlushProject(t, 2, nil)
-	runner := &stubRunner{err: claude.ErrEmptyResponse}
+	runner := &stubRunner{err: host.ErrEmptyResponse}
 	withRunner(t, runner)
 	withSpawnRecorder(t)
 	_, stderr := withStreams(t)
@@ -373,7 +373,7 @@ func TestFlushSpawnsCompanionAtThreshold(t *testing.T) {
 		LogSinceCompanion: 2,
 	})
 	runner := &stubRunner{
-		response: &claude.Response{
+		response: &host.Response{
 			Type:       "result",
 			Result:     "summary text",
 			Model:      "claude-haiku-4-5-20251001",
@@ -405,7 +405,7 @@ func TestFlushSpawnsCompanionAtThreshold(t *testing.T) {
 func TestFlushBelowThresholdDoesNotSpawn(t *testing.T) {
 	root := seedFlushProject(t, 1, nil)
 	runner := &stubRunner{
-		response: &claude.Response{
+		response: &host.Response{
 			Type:       "result",
 			Result:     "summary",
 			Model:      "claude-haiku-4-5-20251001",
@@ -428,9 +428,9 @@ func TestFlushBelowThresholdDoesNotSpawn(t *testing.T) {
 
 func TestFlushCommandNotFoundShowsRemediation(t *testing.T) {
 	root := seedFlushProject(t, 1, nil)
-	runner := &stubRunner{err: stderrors.New("some wrap: " + claude.ErrCommandNotFound.Error())}
+	runner := &stubRunner{err: stderrors.New("some wrap: " + host.ErrCommandNotFound.Error())}
 	// Use a wrapped sentinel via fmt.Errorf for errors.Is to match.
-	runner.err = wrapSentinel(claude.ErrCommandNotFound)
+	runner.err = wrapSentinel(host.ErrCommandNotFound)
 	withRunner(t, runner)
 	withSpawnRecorder(t)
 	_, stderr := withStreams(t)

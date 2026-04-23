@@ -387,7 +387,9 @@ devlog config <key> <value>    # set one
 | `enabled` | bool | `true` | Master on/off switch |
 | `max_diff_chars` | int | `2000` | Max characters per diff in buffer |
 | `max_detail_chars` | int | `200` | Max characters for Edit old/new summaries |
-| `claude_command` | string | `claude` | Path to claude CLI binary |
+| `host` | string | `claude` | Host backend: `claude` or `opencode`. Selected automatically by `devlog install`; hook commands read it to pick the right payload parser. |
+| `host_command` | string | `claude` | Path to the host CLI binary (e.g. `claude`, `opencode`). Used by `flush` and `companion` to spawn the model. |
+| `claude_command` | string | `claude` | **Deprecated.** Legacy alias for `host_command`. On first load, if `claude_command` is present and `host_command` is absent, the value is mirrored into `host_command` automatically. Still written so older binaries keep working. |
 | `summarizer_timeout_seconds` | int | `60` | Timeout for Haiku invocation |
 | `companion_timeout_seconds` | int | `120` | Timeout for Sonnet invocation |
 
@@ -401,25 +403,37 @@ devlog config <key> <value>    # set one
 
 ## install
 
-Install DevLog hooks into Claude Code's settings.json.
+Install DevLog hooks into the chosen host's settings (Claude Code `settings.json` or OpenCode `opencode.json` + plugin directory).
 
 ```
-devlog install [--settings PATH]
+devlog install [--host claude|opencode] [--settings PATH]
+               [--summarizer-model ID] [--companion-model ID]
+               [--host-command PATH] [--claude-command PATH]
+               [--plugin-dir DIR] [--opencode-config PATH]
+               [--project DIR]
 ```
 
 **Flags:**
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--settings` | string | (resolved) | Path to Claude Code settings.json |
+| `--host` | string | (auto-detected) | Host backend: `claude` or `opencode`. When empty, both hosts are probed via their `Detect()` implementations; if exactly one is present it is used, if both are present `claude` wins with a hint about `--host opencode`, and if neither is present installation fails with install links. |
+| `--settings` | string | (resolved) | Path to Claude Code `settings.json`. Claude host only. |
+| `--summarizer-model` | string | (config default) | Override the summarizer model ID written to `.devlog/config.json`. |
+| `--companion-model` | string | (config default) | Override the companion model ID written to `.devlog/config.json`. |
+| `--host-command` | string | (config default) | Path to the host CLI binary (e.g. `claude`, `opencode`). Persisted to `host_command`. |
+| `--claude-command` | string | — | Deprecated alias for `--host-command`. Accepted for backward compatibility; `--host-command` wins when both are provided. |
+| `--plugin-dir` | string | `.opencode/plugins` | OpenCode plugin output directory. OpenCode host only. |
+| `--opencode-config` | string | `opencode.json` | OpenCode config path. OpenCode host only. |
+| `--project` | string | cwd | Project root used to locate `.devlog/`. |
 
-**Settings path resolution:**
+**Settings path resolution (Claude host):**
 
 1. `--settings` flag (if provided)
 2. `CLAUDE_SETTINGS_PATH` environment variable (if set)
 3. `$HOME/.claude/settings.json` (user-scoped default)
 
-**Hook entries written:**
+**Hook entries written (Claude host):**
 
 | Hook Kind | Matcher | Command |
 |-----------|---------|---------|
@@ -428,12 +442,15 @@ devlog install [--settings PATH]
 | PostToolUse | `TaskCreate\|TaskUpdate` | `devlog task-tool-capture` |
 | PreToolUse | `.*` | `devlog check-feedback` |
 
+**OpenCode host:** writes the bundled TypeScript plugin shim to `<plugin-dir>/devlog.ts` and registers it in `<opencode-config>`. The plugin forwards OpenCode events (`chat.message`, `tool.execute.before/after`, `todo.updated`) into the same `devlog` subcommands the Claude hooks invoke.
+
 **Behavior:**
 
 - Creates the settings file and parent directory if missing.
 - Idempotent: existing entries matching the same (matcher, command) pair are never duplicated.
 - Pre-existing unrelated hooks are preserved in place.
 - Write is atomic (temp file + rename).
+- Persists the resolved host, host command, and optional model overrides to `.devlog/config.json`.
 
 **Exit codes:** 0 success, 1 error, 2 usage error.
 
