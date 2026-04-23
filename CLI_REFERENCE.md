@@ -1,6 +1,6 @@
 # DevLog CLI Reference
 
-Death-spiral prevention system for Claude Code agents.
+Death-spiral prevention system for AI coding agents. Supports Claude Code and OpenCode as host backends.
 
 ```
 devlog <command> [args...]
@@ -22,8 +22,8 @@ devlog --help
 | [log](#log) | Print the dev log narrative |
 | [reset](#reset) | Clear all state for a fresh session |
 | [config](#config) | Get/set tunable parameters |
-| [install](#install) | Install hooks into Claude Code settings.json |
-| [uninstall](#uninstall) | Remove hooks from Claude Code settings.json |
+| [install](#install) | Install hooks into host settings (Claude Code or OpenCode) |
+| [uninstall](#uninstall) | Remove hooks from host settings |
 
 ---
 
@@ -66,7 +66,7 @@ Buffer a diff entry from a tool call. When the buffer hits the configured thresh
 devlog capture
 ```
 
-Invoked by Claude Code's **PostToolUse** hook (matcher: `Edit|Write|Bash`). Reads hook input from stdin.
+Invoked by the host's post-tool hook (Claude Code: PostToolUse matcher `Edit|Write|Bash`; OpenCode: `tool.execute.after` plugin event). Reads hook input from stdin.
 
 **Flags:** None.
 
@@ -95,7 +95,7 @@ Record the user's prompt as the original task or a course correction.
 devlog task-capture
 ```
 
-Invoked by Claude Code's **UserPromptSubmit** hook (matcher: empty — fires on every user message). Reads hook input from stdin.
+Invoked by the host's user-message hook (Claude Code: UserPromptSubmit; OpenCode: `chat.message` plugin event). Reads hook input from stdin.
 
 **Flags:** None.
 
@@ -120,7 +120,7 @@ Record TaskCreate and TaskUpdate tool calls.
 devlog task-tool-capture
 ```
 
-Invoked by Claude Code's **PostToolUse** hook (matcher: `TaskCreate|TaskUpdate`). Reads hook input from stdin.
+Invoked by the host's post-tool hook (Claude Code: PostToolUse matcher `TaskCreate|TaskUpdate`; OpenCode: `todo.updated` plugin event). Reads hook input from stdin.
 
 **Flags:** None.
 
@@ -145,7 +145,7 @@ Output pending companion feedback. If no feedback is pending, exits silently.
 devlog check-feedback
 ```
 
-Invoked by Claude Code's **PreToolUse** hook (matcher: `.*` — fires before every tool call).
+Invoked by the host's pre-tool hook (Claude Code: PreToolUse matcher `.*`; OpenCode: `tool.execute.before` plugin event).
 
 **Flags:** None.
 
@@ -155,7 +155,7 @@ Invoked by Claude Code's **PreToolUse** hook (matcher: `.*` — fires before eve
 - Common path: 2 syscalls (Getwd + Stat on feedback.md).
 - If `.devlog/feedback.md` is empty or missing: exits 0 with no output.
 - If feedback.md has content:
-  - Prints content to stdout (Claude Code injects this into the agent's context).
+  - Prints content to stdout (the host injects this into the agent's context).
   - Archives the entry to `.devlog/feedback_archive.jsonl`.
   - Truncates `feedback.md` to zero bytes.
 - All I/O failures are silent (logged to `errors.log`).
@@ -188,7 +188,7 @@ Typically spawned automatically by `capture` when the buffer threshold is reache
 - Sets `flush_in_progress` flag before work begins (under lock). Concurrent invocations that find the flag already set exit 0 as a no-op.
 - Reads buffer entries; if empty, returns immediately.
 - Reads `task.md` and prior log entries for context.
-- Invokes the Haiku model via `claude -p` subprocess.
+- Invokes the Haiku model via the configured host CLI subprocess.
 - On success: appends a log entry to `log.jsonl`, archives buffer entries to `buffer_archive.jsonl`, bumps log counters.
 - When `log_since_companion >= companion_interval`: spawns a detached `devlog companion` process.
 - On summarizer failure: buffer is NOT archived (retries on next flush).
@@ -223,7 +223,7 @@ Typically spawned automatically by `flush` when the log threshold is reached. Ca
 2. Builds the Sonnet prompt via `prompt.BuildCompanionPrompt()`.
 3. If `--dry-run`: prints the prompt and exits.
 4. Acquires `companion_in_progress` guard. If already in progress, prints "skipping" to stderr and exits 0.
-5. Invokes the Sonnet model via `claude -p` subprocess.
+5. Invokes the Sonnet model via the configured host CLI subprocess.
 6. Parses the JSON result. Commits the verdict to `state.json` and resets `log_since_companion`.
 7. If the verdict is **DRIFTING** or **SPIRALING**: formats and writes intervention to `feedback.md`.
 8. On error: guard is released, `log_since_companion` is NOT reset (retries on next threshold crossing).
@@ -285,7 +285,7 @@ Session
 
 Health
   git:     OK   (.git found)
-  claude:  OK   (claude in PATH)
+  host:    OK   (claude in PATH)
   .devlog: OK   (.devlog/ exists)
 ```
 
@@ -294,7 +294,7 @@ Health
 - Prints session summary from `state.json` (if present).
 - Runs three health checks:
   - **git:** `.git` directory exists in cwd or ancestors.
-  - **claude:** `claude` binary is on PATH.
+  - **host:** configured host CLI binary (`claude` or `opencode`) is on PATH.
   - **.devlog:** `.devlog/` directory exists and is readable.
 - Respects the `NO_COLOR` environment variable — when set to any non-empty value, ANSI color codes are omitted.
 
@@ -388,7 +388,7 @@ devlog config <key> <value>    # set one
 | `max_diff_chars` | int | `2000` | Max characters per diff in buffer |
 | `max_detail_chars` | int | `200` | Max characters for Edit old/new summaries |
 | `host` | string | `claude` | Host backend: `claude` or `opencode`. Selected automatically by `devlog install`; hook commands read it to pick the right payload parser. |
-| `host_command` | string | `claude` | Path to the host CLI binary (e.g. `claude`, `opencode`). Used by `flush` and `companion` to spawn the model. |
+| `host_command` | string | *(matches host)* | Path to the host CLI binary (e.g. `claude`, `opencode`). Defaults to the selected `host` value at install time. Used by `flush` and `companion` to spawn the model. |
 | `claude_command` | string | `claude` | **Deprecated.** Legacy alias for `host_command`. On first load, if `claude_command` is present and `host_command` is absent, the value is mirrored into `host_command` automatically. Still written so older binaries keep working. |
 | `summarizer_timeout_seconds` | int | `60` | Timeout for Haiku invocation |
 | `companion_timeout_seconds` | int | `120` | Timeout for Sonnet invocation |
@@ -460,24 +460,27 @@ devlog install [--host claude|opencode] [--settings PATH]
 
 ## uninstall
 
-Remove DevLog hook entries from Claude Code's settings.json.
+Remove DevLog hooks for the configured host backend.
 
 ```
-devlog uninstall [--settings PATH]
+devlog uninstall [--host claude|opencode] [--settings PATH]
+                 [--plugin-dir DIR] [--opencode-config PATH]
 ```
 
 **Flags:**
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--settings` | string | (resolved) | Path to Claude Code settings.json |
+| `--host` | string | (from config) | Host backend: `claude` or `opencode`. Read from `.devlog/config.json` when empty; defaults to `claude` if no config exists. |
+| `--settings` | string | (resolved) | Path to Claude Code settings.json. Claude host only. |
+| `--plugin-dir` | string | `.opencode/plugins` | OpenCode plugin directory. OpenCode host only. |
+| `--opencode-config` | string | `opencode.json` | OpenCode config path. OpenCode host only. |
 
 **Behavior:**
 
-- Removes every entry whose `command` field begins with `devlog ` (or is exactly `devlog`).
-- Unrelated hooks are preserved in place.
-- Idempotent: missing settings file or no matching hooks is a successful no-op.
-- Settings path resolution is identical to `install`.
+- **Claude host:** Removes every entry whose `command` field begins with `devlog ` (or is exactly `devlog`) from settings.json. Unrelated hooks are preserved in place.
+- **OpenCode host:** Removes the `devlog.ts` plugin file and the `devlog` entry from `opencode.json`.
+- Idempotent: missing settings/config file or no matching hooks is a successful no-op.
 - Write is atomic (temp file + rename).
 
 **Exit codes:** 0 success, 1 error, 2 usage error.

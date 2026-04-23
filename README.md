@@ -1,8 +1,8 @@
-# DevLog: Death Spiral Prevention for Claude Code
+# DevLog: Death Spiral Prevention for AI Coding Agents
 
 > **Based on the work of [Kousha Mazloumi](https://www.linkedin.com/pulse/death-spirals-why-smart-agents-fail-how-make-them-wiser-mazloumi-t7mxe/)** — this project implements the ideas from his article *"Death Spirals: Why Smart Agents Fail and How to Make Them Wiser"*, which identified the core anti-patterns and proposed the meta-cognitive companion architecture.
 
-A hooks-based meta-cognitive companion that detects when a Claude Code agent is stuck in a failing loop and injects interventions to break the cycle.
+A hooks-based meta-cognitive companion that detects when an AI coding agent is stuck in a failing loop and injects interventions to break the cycle. Supports [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [OpenCode](https://opencode.ai) as host backends.
 
 ## The Problem
 
@@ -10,9 +10,9 @@ AI coding agents can enter "death spirals" — locked into a wrong mental model,
 
 ## How It Works
 
-DevLog is a single Go binary (`devlog`) that runs alongside a working Claude Code agent via hooks. It provides two layers of meta-cognition:
+DevLog is a single Go binary (`devlog`) that runs alongside a working AI coding agent via hooks. It supports Claude Code and OpenCode as host backends and provides two layers of meta-cognition:
 
-**1. Dev Log** — A compressed narrative memory of what the agent has been doing, continuously updated by Haiku via `claude -p`.
+**1. Dev Log** — A compressed narrative memory of what the agent has been doing, continuously updated by Haiku via the host CLI.
 
 **2. Anti-Pattern Companion** — Sonnet periodically reviews the dev log trajectory and injects interventions into the working agent's context when it detects death spiral patterns.
 
@@ -36,11 +36,11 @@ flowchart TD
     Buffer[(buffer.jsonl)]
 
     BufferGate{buffer_count >= N?}
-    Summarizer[claude -p --model haiku<br/>Summarizer]
+    Summarizer[host CLI --model haiku<br/>Summarizer]
     DevLog[(log.jsonl)]
 
     LogGate{log_since_companion >= M?}
-    Companion[claude -p --model sonnet<br/>Anti-Pattern Companion]
+    Companion[host CLI --model sonnet<br/>Anti-Pattern Companion]
     Feedback[(feedback.md)]
 
     PreHook[PreToolUse Hook]
@@ -118,7 +118,7 @@ services that could also produce timeouts.
 
 - **Go 1.21+** (to build)
 - **Git** (DevLog tracks code changes via `git diff`)
-- **Claude Code CLI** (the summarizer and companion invoke `claude -p` as subprocesses)
+- **Claude Code CLI** or **OpenCode CLI** (the summarizer and companion invoke the host CLI as subprocesses)
 
 ## Installation
 
@@ -133,7 +133,7 @@ mv devlog /usr/local/bin/
 cd /path/to/your/project
 devlog init
 
-# Install Claude Code hooks
+# Install hooks (auto-detects Claude Code or OpenCode)
 devlog install
 ```
 
@@ -166,8 +166,8 @@ On OpenCode, DevLog writes its plugin shim to `.opencode/plugins/devlog.ts` and 
 | `devlog log` | Manual | Print the dev log narrative |
 | `devlog reset` | Manual | Clear all state for a fresh session |
 | `devlog config [key] [value]` | Manual | Get/set tunable parameters |
-| `devlog install` | Manual | Install hooks into Claude Code settings.json |
-| `devlog uninstall` | Manual | Remove hooks from Claude Code settings.json |
+| `devlog install` | Manual | Install hooks into host settings (Claude Code or OpenCode) |
+| `devlog uninstall` | Manual | Remove hooks from host settings |
 
 ## Configuration
 
@@ -180,7 +180,7 @@ All parameters are tunable via `devlog config`:
 | `summarizer_model` | `claude-haiku-4-5-20251001` | Model for dev log summarization |
 | `companion_model` | `claude-sonnet-4-6` | Model for anti-pattern detection |
 | `host` | `claude` | Host backend: `claude` or `opencode` |
-| `host_command` | `claude` | Path to the host CLI binary |
+| `host_command` | *(matches host)* | Path to the host CLI binary |
 | `enabled` | true | Master on/off switch |
 | `max_diff_chars` | 2000 | Max chars per diff entry in buffer |
 | `max_detail_chars` | 200 | Max chars for Edit old/new string summaries |
@@ -195,7 +195,7 @@ $PROJECT/.devlog/
 ├── config.json             # Tunable parameters
 ├── task.md                 # Original task/goal (first user message)
 ├── task_updates.jsonl      # Subsequent user messages
-├── tasks.jsonl             # Claude Code TaskCreate/TaskUpdate captures
+├── tasks.jsonl             # TaskCreate/TaskUpdate captures
 ├── buffer.jsonl            # Current diff buffer (cleared on flush)
 ├── buffer_archive.jsonl    # Archived diffs (for companion context)
 ├── log.jsonl               # Dev log entries (summarized narratives)
