@@ -127,7 +127,7 @@ func filterDevlogHooks(hooks map[string]any) int {
 				kept = append(kept, entry)
 				continue
 			}
-			if isDevlogCommand(asString(obj["command"])) {
+			if entryIsDevlog(obj) {
 				removed++
 				continue
 			}
@@ -138,9 +138,26 @@ func filterDevlogHooks(hooks map[string]any) int {
 	return removed
 }
 
-// isDevlogCommand reports whether cmd is a devlog CLI invocation. We
-// tolerate leading whitespace and accept both "devlog" bare and any
-// "devlog <subcommand>" form; tab-separated commands work too.
+func entryIsDevlog(obj map[string]any) bool {
+	// New nested format: {"matcher": "...", "hooks": [{"type": "command", "command": "devlog ..."}]}
+	if hooksArr, ok := obj["hooks"].([]any); ok {
+		for _, h := range hooksArr {
+			hobj, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if isDevlogCommand(asString(hobj["command"])) {
+				return true
+			}
+		}
+	}
+	// Old flat format: {"matcher": "...", "command": "devlog ..."}
+	if isDevlogCommand(asString(obj["command"])) {
+		return true
+	}
+	return false
+}
+
 func isDevlogCommand(cmd string) bool {
 	trimmed := strings.TrimLeft(cmd, " \t")
 	if trimmed == "devlog" {

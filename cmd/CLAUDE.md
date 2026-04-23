@@ -5,6 +5,9 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #9387 | 9:22 AM | 🔵 | Comprehensive CLI documentation research completed via agent task | ~574 |
+| #9386 | 9:21 AM | 🔵 | Additional CLI commands and configuration system review | ~515 |
+| #9385 | 9:20 AM | 🔵 | CLI command structure review for documentation | ~485 |
 | #9377 | 1:11 AM | 🔄 | Log command updated to use exported scanner constant | ~284 |
 | #9375 | " | 🔴 | Flush command now handles Claude API error responses | ~288 |
 | #9374 | 1:10 AM | 🔴 | Companion command now handles Claude API error responses | ~343 |

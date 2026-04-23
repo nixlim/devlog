@@ -41,8 +41,21 @@ func hasEntry(arr []any, matcher, command string) bool {
 		if !ok {
 			continue
 		}
-		if obj["matcher"] == matcher && obj["command"] == command {
-			return true
+		if asString(obj["matcher"]) != matcher {
+			continue
+		}
+		hooksArr, ok := obj["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, h := range hooksArr {
+			hobj, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if asString(hobj["type"]) == "command" && asString(hobj["command"]) == command {
+				return true
+			}
 		}
 	}
 	return false
@@ -115,10 +128,20 @@ func TestInstallPreservesExistingUnrelatedHooks(t *testing.T) {
 		"model": "claude-opus-4-7",
 		"hooks": map[string]any{
 			"UserPromptSubmit": []any{
-				map[string]any{"matcher": "", "command": "other-tool stuff"},
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "other-tool stuff"},
+					},
+				},
 			},
 			"Stop": []any{
-				map[string]any{"matcher": "", "command": "notify-done"},
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "notify-done"},
+					},
+				},
 			},
 		},
 	}
@@ -232,6 +255,74 @@ func TestInstallRejectsNonObjectHooks(t *testing.T) {
 	code := Install([]string{"--settings", settingsPath})
 	if code == 0 {
 		t.Error("Install should fail when hooks is not an object")
+	}
+}
+
+// TestInstallWritesCorrectClaudeCodeSchema verifies that hook entries use
+// the nested format Claude Code requires:
+//
+//	{"matcher": "...", "hooks": [{"type": "command", "command": "..."}]}
+//
+// NOT the flat format:
+//
+//	{"matcher": "...", "command": "..."}
+func TestInstallWritesCorrectClaudeCodeSchema(t *testing.T) {
+	root := t.TempDir()
+	settingsPath := filepath.Join(root, "settings.json")
+
+	withStreams(t)
+	if code := Install([]string{"--settings", settingsPath}); code != 0 {
+		t.Fatalf("Install exit = %d, want 0", code)
+	}
+
+	s := readSettings(t, settingsPath)
+
+	for _, tc := range []struct {
+		kind    string
+		matcher string
+		command string
+	}{
+		{"PostToolUse", "Edit|Write|Bash", "devlog capture"},
+		{"PostToolUse", "TaskCreate|TaskUpdate", "devlog task-tool-capture"},
+		{"PreToolUse", ".*", "devlog check-feedback"},
+		{"UserPromptSubmit", "", "devlog task-capture"},
+	} {
+		arr := hookArr(t, s, tc.kind)
+		found := false
+		for _, e := range arr {
+			obj, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if obj["matcher"] != tc.matcher {
+				continue
+			}
+			// Must NOT have a top-level "command" key.
+			if _, hasCmd := obj["command"]; hasCmd {
+				t.Errorf("%s[matcher=%q]: has top-level 'command' field — "+
+					"Claude Code requires hooks wrapped in a 'hooks' array",
+					tc.kind, tc.matcher)
+			}
+			// Must have a "hooks" array with the command inside.
+			hooksArr, ok := obj["hooks"].([]any)
+			if !ok {
+				t.Errorf("%s[matcher=%q]: missing 'hooks' array", tc.kind, tc.matcher)
+				continue
+			}
+			for _, h := range hooksArr {
+				hobj, ok := h.(map[string]any)
+				if !ok {
+					continue
+				}
+				if hobj["type"] == "command" && hobj["command"] == tc.command {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s[matcher=%q]: expected hook with command %q not found in correct nested format",
+				tc.kind, tc.matcher, tc.command)
+		}
 	}
 }
 

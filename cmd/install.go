@@ -10,11 +10,14 @@ import (
 	derrors "devlog/internal/errors"
 )
 
-// hookEntry matches the shape SPEC.md defines under "Hook Configuration":
-// each entry has a matcher (pattern string) and a command to run.
-type hookEntry struct {
-	Matcher string `json:"matcher"`
+type hookInner struct {
+	Type    string `json:"type"`
 	Command string `json:"command"`
+}
+
+type hookEntry struct {
+	Matcher string      `json:"matcher"`
+	Hooks   []hookInner `json:"hooks"`
 }
 
 // desiredHooks is the set of entries `devlog install` must (idempotently)
@@ -23,14 +26,14 @@ type hookEntry struct {
 // appended in — unrelated pre-existing entries keep their original slots.
 var desiredHooks = map[string][]hookEntry{
 	"UserPromptSubmit": {
-		{Matcher: "", Command: "devlog task-capture"},
+		{Matcher: "", Hooks: []hookInner{{Type: "command", Command: "devlog task-capture"}}},
 	},
 	"PostToolUse": {
-		{Matcher: "Edit|Write|Bash", Command: "devlog capture"},
-		{Matcher: "TaskCreate|TaskUpdate", Command: "devlog task-tool-capture"},
+		{Matcher: "Edit|Write|Bash", Hooks: []hookInner{{Type: "command", Command: "devlog capture"}}},
+		{Matcher: "TaskCreate|TaskUpdate", Hooks: []hookInner{{Type: "command", Command: "devlog task-tool-capture"}}},
 	},
 	"PreToolUse": {
-		{Matcher: ".*", Command: "devlog check-feedback"},
+		{Matcher: ".*", Hooks: []hookInner{{Type: "command", Command: "devlog check-feedback"}}},
 	},
 }
 
@@ -202,23 +205,47 @@ func asEntrySlice(v any) []any {
 	return nil
 }
 
-// hookAlreadyPresent reports whether an entry with the same matcher and
-// command as want already lives in entries. Comparison is strict on both
-// fields so an existing, but different, command for the same matcher
-// still triggers an append — operators may intentionally stack multiple
-// hooks per matcher.
 func hookAlreadyPresent(entries []any, want hookEntry) bool {
 	for _, e := range entries {
 		obj, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
-		if asString(obj["matcher"]) == want.Matcher &&
-			asString(obj["command"]) == want.Command {
+		if asString(obj["matcher"]) != want.Matcher {
+			continue
+		}
+		hooksRaw, ok := obj["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		if innerCommandsMatch(hooksRaw, want.Hooks) {
 			return true
 		}
 	}
 	return false
+}
+
+func innerCommandsMatch(existing []any, want []hookInner) bool {
+	if len(want) == 0 {
+		return false
+	}
+	for _, w := range want {
+		found := false
+		for _, e := range existing {
+			obj, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if asString(obj["type"]) == w.Type && asString(obj["command"]) == w.Command {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // asString returns v as a string when v is a string, else the empty
