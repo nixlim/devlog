@@ -16,22 +16,59 @@ DevLog is a single Go binary (`devlog`) that runs alongside a working Claude Cod
 
 ### Pipeline
 
-```
-User prompt ──> [UserPromptSubmit hook] ──> task.md (captures the goal)
+```mermaid
+---
+config:
+  layout: elk
+  theme: neutral
+  look: neo
+---
+flowchart TD
+    UserPrompt([User prompt])
+    UPSHook[UserPromptSubmit Hook]
+    TaskMD[(task.md)]
 
-Agent works ──> [PostToolUse hook] ──> buffer.jsonl (captures diffs)
-                                            │
-                                   buffer hits 10 entries?
-                                            │
-                                   Haiku summarizes ──> log.jsonl
-                                            │
-                                   5 log entries since last check?
-                                            │
-                                   Sonnet assesses trajectory
-                                            │
-                                   spiraling? ──> feedback.md
-                                            │
-Next tool call ──> [PreToolUse hook] ──> injects feedback into agent context
+    Agent[Working Agent — Opus]
+    ToolCalls([Edit / Write / Bash])
+    PostHook[PostToolUse Hook]
+    Buffer[(buffer.jsonl)]
+
+    BufferGate{buffer_count >= N?}
+    Summarizer[claude -p --model haiku<br/>Summarizer]
+    DevLog[(log.jsonl)]
+
+    LogGate{log_since_companion >= M?}
+    Companion[claude -p --model sonnet<br/>Anti-Pattern Companion]
+    Feedback[(feedback.md)]
+
+    PreHook[PreToolUse Hook]
+    Injected([Injected into agent context])
+
+    UserPrompt --> UPSHook --> TaskMD
+    TaskMD -.context.-> Summarizer
+    TaskMD -.context.-> Companion
+
+    Agent --> ToolCalls --> PostHook --> Buffer
+    Buffer --> BufferGate
+    BufferGate -->|yes, background| Summarizer
+    BufferGate -->|no| Agent
+    Summarizer --> DevLog
+    DevLog --> LogGate
+    LogGate -->|yes, background| Companion
+    LogGate -->|no| Agent
+    Companion --> Feedback
+    Feedback --> PreHook --> Injected --> Agent
+
+    classDef default fill:#f5f5f5,stroke:#333,stroke-width:1px,color:#111
+    classDef store fill:#e8e8e8,stroke:#333,stroke-width:1px,color:#111
+    classDef model fill:#d4d4d4,stroke:#000,stroke-width:1.5px,color:#000
+    classDef gate fill:#fff,stroke:#333,stroke-width:1px,stroke-dasharray:3 3,color:#111
+    classDef io fill:#fafafa,stroke:#555,stroke-width:1px,color:#111
+
+    class TaskMD,Buffer,DevLog,Feedback store
+    class Summarizer,Companion model
+    class BufferGate,LogGate gate
+    class UserPrompt,ToolCalls,Injected io
 ```
 
 The capture hook is synchronous and fast (<200ms). The summarizer and companion run as detached background processes — nothing blocks the working agent.
