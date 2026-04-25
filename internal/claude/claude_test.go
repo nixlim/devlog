@@ -234,6 +234,60 @@ func TestParseResponseRawIsolated(t *testing.T) {
 	}
 }
 
+// successArrayEnvelope is the actual format emitted by claude -p
+// --output-format json: a JSON array of streaming events where the last
+// element with type=result carries the model response.
+const successArrayEnvelope = `[
+  {"type":"system","subtype":"init","session_id":"sess-abc","model":"claude-haiku-4-5-20251001"},
+  {"type":"assistant","message":{"model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"Summarized diffs."}]},"session_id":"sess-abc"},
+  {"type":"result","subtype":"success","is_error":false,"duration_ms":1200,"duration_api_ms":900,"num_turns":1,"result":"Summarized diffs.","session_id":"sess-abc","total_cost_usd":0.0012,"model":"claude-haiku-4-5-20251001"}
+]`
+
+func TestParseResponseArrayEnvelope(t *testing.T) {
+	resp, err := claude.ParseResponse([]byte(successArrayEnvelope))
+	if err != nil {
+		t.Fatalf("ParseResponse: %v", err)
+	}
+	if resp.Type != "result" || resp.Subtype != "success" {
+		t.Errorf("envelope discriminator wrong: type=%q subtype=%q", resp.Type, resp.Subtype)
+	}
+	if resp.Result != "Summarized diffs." {
+		t.Errorf("Result = %q, want 'Summarized diffs.'", resp.Result)
+	}
+	if resp.Model != "claude-haiku-4-5-20251001" {
+		t.Errorf("Model = %q, want haiku", resp.Model)
+	}
+	if resp.DurationMS != 1200 {
+		t.Errorf("DurationMS = %d, want 1200", resp.DurationMS)
+	}
+}
+
+func TestParseResponseArrayNoResult(t *testing.T) {
+	const noResult = `[
+	  {"type":"system","subtype":"init","session_id":"sess-abc"},
+	  {"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+	]`
+	_, err := claude.ParseResponse([]byte(noResult))
+	if !errors.Is(err, claude.ErrInvalidJSON) {
+		t.Errorf("array with no result element should return ErrInvalidJSON: %v", err)
+	}
+}
+
+func TestRunSuccessArrayFormat(t *testing.T) {
+	fc := testutil.NewFakeClaude(t)
+	if err := fc.SetResponse(successArrayEnvelope, "", 0); err != nil {
+		t.Fatalf("SetResponse: %v", err)
+	}
+	r := claude.New(fc.BinPath)
+	resp, err := r.Run(context.Background(), "claude-haiku-4-5-20251001", "summarize", 10*time.Second)
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+	if resp.Result != "Summarized diffs." {
+		t.Errorf("Result = %q, want 'Summarized diffs.'", resp.Result)
+	}
+}
+
 func TestExitErrorMessage(t *testing.T) {
 	e := &claude.ExitError{ExitCode: 7, Stderr: "boom\n"}
 	msg := e.Error()

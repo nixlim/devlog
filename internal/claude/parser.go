@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -37,9 +38,12 @@ type Response struct {
 	Raw []byte `json:"-"`
 }
 
-// ParseResponse parses the JSON envelope emitted by `claude -p
-// --output-format json`. Leading/trailing whitespace is tolerated; any
-// other malformed input returns ErrInvalidJSON.
+// ParseResponse parses the JSON output emitted by `claude -p
+// --output-format json`. The output may be either a single result object
+// or a JSON array of streaming events (init, assistant, rate_limit,
+// result). In array form, the last element with type "result" is used.
+// Leading/trailing whitespace is tolerated; any other malformed input
+// returns ErrInvalidJSON.
 //
 // An envelope with IsError=true is still returned to the caller — the
 // caller decides whether to surface that as a hard failure or let the
@@ -48,11 +52,40 @@ func ParseResponse(data []byte) (*Response, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("%w: stdout was empty", ErrInvalidJSON)
 	}
+
+	trimmed := bytes.TrimSpace(data)
+
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		return parseArrayResponse(data, trimmed)
+	}
+
 	var resp Response
-	if err := json.Unmarshal(data, &resp); err != nil {
+	if err := json.Unmarshal(trimmed, &resp); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidJSON, err)
 	}
-	// Retain a copy so mutation of the caller's buffer can't poison Raw.
 	resp.Raw = append([]byte(nil), data...)
 	return &resp, nil
+}
+
+func parseArrayResponse(raw, trimmed []byte) (*Response, error) {
+	var events []json.RawMessage
+	if err := json.Unmarshal(trimmed, &events); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidJSON, err)
+	}
+
+	for i := len(events) - 1; i >= 0; i-- {
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(events[i], &probe) == nil && probe.Type == "result" {
+			var resp Response
+			if err := json.Unmarshal(events[i], &resp); err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrInvalidJSON, err)
+			}
+			resp.Raw = append([]byte(nil), raw...)
+			return &resp, nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: no result element in array", ErrInvalidJSON)
 }
