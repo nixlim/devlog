@@ -204,6 +204,42 @@ $PROJECT/.devlog/
 └── errors.log              # All non-fatal errors
 ```
 
+## Event Sinks
+
+DevLog can stream raw, untruncated hook events to external consumers via configurable sinks. While the internal pipeline summarizes and compresses data for the companion, sinks receive the full payload — complete file paths, full diffs, and unmodified tool inputs — so downstream systems can process events without information loss.
+
+Sinks are best-effort: emission failures are logged but never block the capture hook or degrade the working agent's experience.
+
+### Supported sink types
+
+| Type | Description |
+|------|-------------|
+| `jsonl` | Append events as newline-delimited JSON to a file |
+| `unix_socket` | Stream events to a Unix domain socket |
+
+### Configuration
+
+Add a `sinks` array to `.devlog/config.json`:
+
+```json
+{
+  "sinks": [
+    {"type": "jsonl", "path": "/tmp/devlog-events.jsonl"},
+    {"type": "unix_socket", "path": "/tmp/devlog.sock"}
+  ]
+}
+```
+
+### Event types
+
+| Event | Trigger |
+|-------|---------|
+| `capture` | PostToolUse hook (Edit, Write, Bash) |
+| `task` | UserPromptSubmit hook (user's prompt) |
+| `task_tool` | PostToolUse hook (TaskCreate/TaskUpdate) |
+| `log` | Haiku summarizer produced a narrative entry |
+| `companion` | Sonnet companion produced an assessment |
+
 ## Design Decisions
 
 **Why hooks, not MCP?** An agent in a death spiral won't voluntarily call a tool for help. Hooks push feedback into the agent's context automatically — involuntary reconsideration.
