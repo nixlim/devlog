@@ -48,7 +48,7 @@ func TestStatus_FullyInitialized_AllHealthy(t *testing.T) {
 		"Last companion: on_track @ 2026-04-22T22:14:00Z (confidence: 92%)",
 		"Health:",
 		"git:      OK",
-		"claude:   OK",
+		"claude:   OK", // default config uses host=claude
 		".devlog:  OK",
 	} {
 		if !strings.Contains(got, want) {
@@ -75,7 +75,8 @@ func TestStatus_Uninitialized_ReturnsFailure(t *testing.T) {
 	}
 	wantSubs := []string{
 		"not initialized",
-		"claude:   FAIL",
+		"FAIL",
+		"not found in PATH",
 		".devlog:  FAIL",
 		"run 'devlog init'",
 	}
@@ -205,6 +206,76 @@ func TestPercentOf(t *testing.T) {
 		if got := percentOf(c.c); got != c.want {
 			t.Errorf("percentOf(%v) = %d, want %d", c.c, got, c.want)
 		}
+	}
+}
+
+func TestStatus_OpenCodeHost_ChecksOpenCodeCommand(t *testing.T) {
+	root := testutil.NewTempDevlogDir(t)
+	writeTestState(t, root, &state.State{SessionID: "oc1"})
+	writeTestConfig(t, root, &state.Config{
+		Host:        "opencode",
+		HostCommand: "opencode",
+	})
+	t.Setenv("NO_COLOR", "1")
+	t.Setenv("PATH", "") // opencode won't be found
+
+	var buf bytes.Buffer
+	code := writeStatus(root, &buf)
+	got := buf.String()
+
+	if code != 1 {
+		t.Errorf("expected exit 1 (opencode not in PATH), got %d", code)
+	}
+	if !strings.Contains(got, "opencode:") {
+		t.Errorf("expected host label 'opencode:', got:\n%s", got)
+	}
+	if !strings.Contains(got, "opencode not found in PATH") {
+		t.Errorf("expected 'opencode not found in PATH', got:\n%s", got)
+	}
+}
+
+func TestStatus_OpenCodeHost_OK(t *testing.T) {
+	root := testutil.NewTempDevlogDir(t)
+	writeTestState(t, root, &state.State{SessionID: "oc2"})
+	writeTestConfig(t, root, &state.Config{
+		Host:        "opencode",
+		HostCommand: "opencode",
+	})
+	t.Setenv("NO_COLOR", "1")
+	// Create a fake opencode binary on PATH
+	binDir := t.TempDir()
+	fakeBin := filepath.Join(binDir, "opencode")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	var buf bytes.Buffer
+	writeStatus(root, &buf)
+	got := buf.String()
+
+	if !strings.Contains(got, "opencode:") {
+		t.Errorf("expected host label 'opencode:', got:\n%s", got)
+	}
+	if !strings.Contains(got, "OK") {
+		t.Errorf("expected OK for opencode, got:\n%s", got)
+	}
+}
+
+// writeTestConfig writes cfg to <root>/.devlog/config.json.
+func writeTestConfig(t *testing.T, root string, cfg *state.Config) {
+	t.Helper()
+	dir := filepath.Join(root, ".devlog")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 }
 

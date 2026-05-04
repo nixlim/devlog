@@ -12,6 +12,29 @@ import (
 	"devlog/internal/state"
 )
 
+// hostHealthInfo holds the resolved host label and command for the health check.
+type hostHealthInfo struct {
+	label   string
+	command string
+}
+
+func resolveHostHealth(devlogDir string) hostHealthInfo {
+	configPath := filepath.Join(devlogDir, "config.json")
+	cfg, err := state.LoadConfig(configPath)
+	if err != nil {
+		return hostHealthInfo{label: "host", command: "claude"}
+	}
+	label := cfg.Host
+	if label == "" {
+		label = "host"
+	}
+	cmd := cfg.HostCommand
+	if cmd == "" {
+		cmd = "claude"
+	}
+	return hostHealthInfo{label: label, command: cmd}
+}
+
 // Status implements `devlog status`.
 //
 // Prints a session summary (counters, last companion verdict) followed by a
@@ -126,14 +149,15 @@ func writeHealth(w io.Writer, useColor bool, projectDir, devlogDir string) bool 
 	printHealthLine(w, useColor, "git", gitOK, gitDetail)
 	anyFail = anyFail || !gitOK
 
-	claudePath, lookErr := exec.LookPath("claude")
-	claudeOK := lookErr == nil
-	claudeDetail := claudePath
-	if !claudeOK {
-		claudeDetail = "not found in PATH"
+	hi := resolveHostHealth(devlogDir)
+	hostPath, lookErr := exec.LookPath(hi.command)
+	hostOK := lookErr == nil
+	hostDetail := hostPath
+	if !hostOK {
+		hostDetail = hi.command + " not found in PATH"
 	}
-	printHealthLine(w, useColor, "claude", claudeOK, claudeDetail)
-	anyFail = anyFail || !claudeOK
+	printHealthLine(w, useColor, hi.label, hostOK, hostDetail)
+	anyFail = anyFail || !hostOK
 
 	info, statErr := os.Stat(devlogDir)
 	devlogOK := statErr == nil && info.IsDir()
