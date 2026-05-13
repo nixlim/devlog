@@ -1,0 +1,17 @@
+{
+  "buffer_size": 10,
+  "companion_interval": 5,
+  "summarizer_model": "claude-haiku-4-5-20251001",
+  "companion_model": "claude-sonnet-4-6",
+  "summarizer_context_entries": 5,
+  "companion_log_entries": 25,
+  "companion_diff_entries": 50,
+  "enabled": true,
+  "max_diff_chars": 2000,
+  "max_detail_chars": 200,
+  "host": "opencode",
+  "host_command": "opencode",
+  "claude_command": "claude",
+  "summarizer_timeout_seconds": 60,
+  "companion_timeout_seconds": 120
+}

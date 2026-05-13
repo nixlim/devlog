@@ -95,8 +95,9 @@ func (h *OpenCodeHost) NormalizeModel(s string) string {
 
 // Install writes the embedded TypeScript plugin shim into the OpenCode
 // plugin directory and merges a reference to it into opencode.json.
-// PluginDir defaults to ".opencode/plugins" and ConfigPath to
-// "opencode.json" relative to the current working directory.
+// PluginDir defaults to ".opencode/plugins" relative to the current
+// working directory. OpenCode auto-loads plugins from that directory,
+// so no opencode.json modification is needed.
 func (h *OpenCodeHost) Install(opts host.InstallOpts) error {
 	pluginDir := opts.PluginDir
 	if pluginDir == "" {
@@ -111,47 +112,7 @@ func (h *OpenCodeHost) Install(opts host.InstallOpts) error {
 		return fmt.Errorf("write plugin %s: %w", pluginPath, err)
 	}
 
-	configPath := opts.ConfigPath
-	if configPath == "" {
-		configPath = "opencode.json"
-	}
-	return mergeOpenCodeConfig(configPath, pluginPath)
-}
-
-// mergeOpenCodeConfig reads opencode.json (treating missing as empty),
-// sets plugins.devlog to pluginPath, and writes the file back. Any other
-// top-level keys or plugin entries are preserved.
-func mergeOpenCodeConfig(path, pluginPath string) error {
-	var config map[string]any
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			config = map[string]any{}
-		} else {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-	} else {
-		if err := json.Unmarshal(data, &config); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		if config == nil {
-			config = map[string]any{}
-		}
-	}
-
-	plugins, _ := config["plugins"].(map[string]any)
-	if plugins == nil {
-		plugins = map[string]any{}
-	}
-	plugins["devlog"] = pluginPath
-	config["plugins"] = plugins
-
-	out, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
-	}
-	out = append(out, '\n')
-	return os.WriteFile(path, out, 0o644)
+	return nil
 }
 
 // Uninstall is the inverse of Install: remove the plugin file and strip
@@ -164,28 +125,7 @@ func (h *OpenCodeHost) Uninstall(opts host.InstallOpts) error {
 		pluginDir = ".opencode/plugins"
 	}
 	_ = os.Remove(filepath.Join(pluginDir, "devlog.ts"))
-
-	configPath := opts.ConfigPath
-	if configPath == "" {
-		configPath = "opencode.json"
-	}
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil
-	}
-	var config map[string]any
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil
-	}
-	if plugins, ok := config["plugins"].(map[string]any); ok {
-		delete(plugins, "devlog")
-	}
-	out, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil
-	}
-	out = append(out, '\n')
-	return os.WriteFile(configPath, out, 0o644)
+	return nil
 }
 
 // execCommand is indirected for tests. Production is exec.CommandContext.

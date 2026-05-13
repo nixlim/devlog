@@ -3,7 +3,6 @@ package opencode
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -63,8 +62,7 @@ func TestInstallWritesPlugin(t *testing.T) {
 	dir := t.TempDir()
 	h := &OpenCodeHost{}
 	pluginDir := filepath.Join(dir, "plugins")
-	configPath := filepath.Join(dir, "opencode.json")
-	if err := h.Install(host.InstallOpts{PluginDir: pluginDir, ConfigPath: configPath}); err != nil {
+	if err := h.Install(host.InstallOpts{PluginDir: pluginDir}); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	pluginPath := filepath.Join(pluginDir, "devlog.ts")
@@ -75,87 +73,42 @@ func TestInstallWritesPlugin(t *testing.T) {
 	if !bytes.Contains(data, []byte("tool.execute.before")) {
 		t.Error("plugin file missing expected content")
 	}
-	cfgData, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("read opencode.json: %v", err)
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(cfgData, &cfg); err != nil {
-		t.Fatalf("parse opencode.json: %v", err)
-	}
-	plugins, ok := cfg["plugins"].(map[string]any)
-	if !ok {
-		t.Fatalf("plugins key missing or wrong type: %T", cfg["plugins"])
-	}
-	if plugins["devlog"] != pluginPath {
-		t.Errorf("plugins.devlog = %v, want %q", plugins["devlog"], pluginPath)
-	}
 }
 
-func TestInstallPreservesExistingConfig(t *testing.T) {
+func TestInstallDoesNotCreateConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	existing := map[string]any{
-		"theme": "dark",
-		"plugins": map[string]any{
-			"other": "./plugins/other.ts",
-		},
-	}
-	data, _ := json.MarshalIndent(existing, "", "  ")
-	if err := os.WriteFile(configPath, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	h := &OpenCodeHost{}
-	if err := h.Install(host.InstallOpts{PluginDir: filepath.Join(dir, "p"), ConfigPath: configPath}); err != nil {
+	if err := h.Install(host.InstallOpts{PluginDir: filepath.Join(dir, "p")}); err != nil {
 		t.Fatal(err)
 	}
-	cfgData, _ := os.ReadFile(configPath)
-	var cfg map[string]any
-	_ = json.Unmarshal(cfgData, &cfg)
-	if cfg["theme"] != "dark" {
-		t.Errorf("theme clobbered: %v", cfg["theme"])
-	}
-	plugins := cfg["plugins"].(map[string]any)
-	if plugins["other"] != "./plugins/other.ts" {
-		t.Errorf("other plugin dropped: %v", plugins["other"])
-	}
-	if _, ok := plugins["devlog"]; !ok {
-		t.Error("devlog plugin not added")
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Errorf("Install should not create opencode.json, got err=%v", err)
 	}
 }
 
-func TestUninstallRemovesPluginAndConfig(t *testing.T) {
+func TestUninstallRemovesPlugin(t *testing.T) {
 	dir := t.TempDir()
 	h := &OpenCodeHost{}
 	pluginDir := filepath.Join(dir, "plugins")
-	configPath := filepath.Join(dir, "opencode.json")
-	if err := h.Install(host.InstallOpts{PluginDir: pluginDir, ConfigPath: configPath}); err != nil {
+	if err := h.Install(host.InstallOpts{PluginDir: pluginDir}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Uninstall(host.InstallOpts{PluginDir: pluginDir, ConfigPath: configPath}); err != nil {
+	if err := h.Uninstall(host.InstallOpts{PluginDir: pluginDir}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(pluginDir, "devlog.ts")); !os.IsNotExist(err) {
 		t.Errorf("plugin file not removed: err=%v", err)
 	}
-	cfgData, _ := os.ReadFile(configPath)
-	var cfg map[string]any
-	_ = json.Unmarshal(cfgData, &cfg)
-	if plugins, ok := cfg["plugins"].(map[string]any); ok {
-		if _, has := plugins["devlog"]; has {
-			t.Error("plugins.devlog still present after uninstall")
-		}
-	}
 }
 
-func TestUninstallMissingConfig(t *testing.T) {
+func TestUninstallMissingPlugin(t *testing.T) {
 	dir := t.TempDir()
 	h := &OpenCodeHost{}
 	if err := h.Uninstall(host.InstallOpts{
-		PluginDir:  filepath.Join(dir, "plugins"),
-		ConfigPath: filepath.Join(dir, "opencode.json"),
+		PluginDir: filepath.Join(dir, "plugins"),
 	}); err != nil {
-		t.Errorf("Uninstall on missing config should be no-op, got %v", err)
+		t.Errorf("Uninstall on missing plugin should be no-op, got %v", err)
 	}
 }
 
