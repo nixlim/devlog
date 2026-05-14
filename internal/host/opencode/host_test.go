@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,10 +118,13 @@ func TestRunLLMArgv(t *testing.T) {
 	var capturedArgs []string
 	origExec := execCommand
 	defer func() { execCommand = origExec }()
+	ndjson := `{"type":"step_start","timestamp":1000,"sessionID":"ses_abc","part":{}}
+{"type":"text","timestamp":1050,"sessionID":"ses_abc","part":{"type":"text","text":"test"}}
+{"type":"step_finish","timestamp":1100,"sessionID":"ses_abc","part":{"type":"step-finish","cost":0.001}}`
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		capturedName = name
 		capturedArgs = append([]string(nil), args...)
-		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"test","model":"anthropic/test"}`)
+		return exec.CommandContext(ctx, "printf", "%s", ndjson)
 	}
 	h := &OpenCodeHost{Command: "opencode"}
 	resp, err := h.RunLLM(context.Background(), "claude-haiku-4-5-20251001", "summarize", 10*time.Second)
@@ -152,29 +156,66 @@ func TestRunLLMCommandNotFound(t *testing.T) {
 	}
 }
 
-func TestRunLLMInvalidJSON(t *testing.T) {
-	origExec := execCommand
-	defer func() { execCommand = origExec }()
-	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "echo", "not json")
-	}
-	h := &OpenCodeHost{Command: "opencode"}
-	_, err := h.RunLLM(context.Background(), "model", "prompt", time.Second)
-	if !errors.Is(err, host.ErrInvalidJSON) {
-		t.Errorf("expected ErrInvalidJSON, got %v", err)
-	}
-}
-
 func TestRunLLMEmptyResult(t *testing.T) {
 	origExec := execCommand
 	defer func() { execCommand = origExec }()
+	ndjson := `{"type":"step_start","timestamp":1000,"sessionID":"ses_abc","part":{}}
+{"type":"text","timestamp":1050,"sessionID":"ses_abc","part":{"type":"text","text":"   "}}
+{"type":"step_finish","timestamp":1100,"sessionID":"ses_abc","part":{"type":"step-finish"}}`
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "echo", `{"type":"result","result":"   "}`)
+		return exec.CommandContext(ctx, "printf", "%s", ndjson)
 	}
 	h := &OpenCodeHost{Command: "opencode"}
 	_, err := h.RunLLM(context.Background(), "model", "prompt", time.Second)
 	if !errors.Is(err, host.ErrEmptyResponse) {
 		t.Errorf("expected ErrEmptyResponse, got %v", err)
+	}
+}
+
+func TestRunLLMErrorEvent(t *testing.T) {
+	origExec := execCommand
+	defer func() { execCommand = origExec }()
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "echo",
+			`{"type":"error","sessionID":"ses_abc","error":{"name":"UnknownError","data":{"message":"Model not found: anthropic/bad-model"}}}`)
+	}
+	h := &OpenCodeHost{Command: "opencode"}
+	_, err := h.RunLLM(context.Background(), "bad-model", "prompt", time.Second)
+	if !errors.Is(err, host.ErrNonZeroExit) {
+		t.Errorf("expected ErrNonZeroExit, got %v", err)
+	}
+	var exitErr *host.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *host.ExitError, got %T", err)
+	}
+	if !strings.Contains(exitErr.Stderr, "Model not found") {
+		t.Errorf("stderr = %q, want it to contain 'Model not found'", exitErr.Stderr)
+	}
+}
+
+func TestRunLLMMultipleTextParts(t *testing.T) {
+	origExec := execCommand
+	defer func() { execCommand = origExec }()
+	ndjson := `{"type":"step_start","timestamp":1000,"sessionID":"ses_abc","part":{}}
+{"type":"text","timestamp":1050,"sessionID":"ses_abc","part":{"type":"text","text":"hello "}}
+{"type":"text","timestamp":1060,"sessionID":"ses_abc","part":{"type":"text","text":"world"}}
+{"type":"step_finish","timestamp":1100,"sessionID":"ses_abc","part":{"type":"step-finish","cost":0.002}}`
+	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "printf", "%s", ndjson)
+	}
+	h := &OpenCodeHost{Command: "opencode"}
+	resp, err := h.RunLLM(context.Background(), "model", "prompt", time.Second)
+	if err != nil {
+		t.Fatalf("RunLLM: %v", err)
+	}
+	if resp.Result != "hello world" {
+		t.Errorf("Result = %q, want %q", resp.Result, "hello world")
+	}
+	if resp.DurationMS != 100 {
+		t.Errorf("DurationMS = %d, want 100", resp.DurationMS)
+	}
+	if resp.TotalCostUSD != 0.002 {
+		t.Errorf("TotalCostUSD = %f, want 0.002", resp.TotalCostUSD)
 	}
 }
 
@@ -193,4 +234,105 @@ func TestRunLLMTimeout(t *testing.T) {
 
 func TestHostConfigurable(t *testing.T) {
 	var _ host.Configurable = (*OpenCodeHost)(nil)
+}
+
+func TestHostModelDiscoverer(t *testing.T) {
+	var _ host.ModelDiscoverer = (*OpenCodeHost)(nil)
+}
+
+func TestDiscoverModels(t *testing.T) {
+	origList := listModelsCommand
+	defer func() { listModelsCommand = origList }()
+	var capturedArgs []string
+	listModelsCommand = func(cmd string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string(nil), args...)
+		return exec.Command("printf", "%s",
+			"tesco-anthropic/haiku-4.5\ntesco-anthropic/opus-4.6\ntesco-anthropic/sonnet-4.6\ntesco-openai/gpt-5.4\n")
+	}
+	h := &OpenCodeHost{Command: "opencode"}
+	sum, comp, err := h.DiscoverModels()
+	if err != nil {
+		t.Fatalf("DiscoverModels: %v", err)
+	}
+	if sum != "tesco-anthropic/haiku-4.5" {
+		t.Errorf("summarizer = %q, want tesco-anthropic/haiku-4.5", sum)
+	}
+	if comp != "tesco-anthropic/sonnet-4.6" {
+		t.Errorf("companion = %q, want tesco-anthropic/sonnet-4.6", comp)
+	}
+	if !reflect.DeepEqual(capturedArgs, []string{"models"}) {
+		t.Errorf("list command args = %v, want [models]", capturedArgs)
+	}
+}
+
+func TestDiscoverModelsNoMatch(t *testing.T) {
+	origList := listModelsCommand
+	defer func() { listModelsCommand = origList }()
+	listModelsCommand = func(cmd string, args ...string) *exec.Cmd {
+		return exec.Command("printf", "%s", "tesco-openai/gpt-5.4\ntesco-other/kimi-k2.5\n")
+	}
+	h := &OpenCodeHost{Command: "opencode"}
+	sum, comp, err := h.DiscoverModels()
+	if err != nil {
+		t.Fatalf("DiscoverModels: %v", err)
+	}
+	if sum != "" {
+		t.Errorf("summarizer should be empty when no haiku, got %q", sum)
+	}
+	if comp != "" {
+		t.Errorf("companion should be empty when no sonnet, got %q", comp)
+	}
+}
+
+func TestDiscoverModelsFallsBackToLegacyCommand(t *testing.T) {
+	origList := listModelsCommand
+	defer func() { listModelsCommand = origList }()
+	var calls [][]string
+	listModelsCommand = func(cmd string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string(nil), args...))
+		if reflect.DeepEqual(args, []string{"models"}) {
+			return exec.Command("sh", "-c", "exit 2")
+		}
+		return exec.Command("printf", "%s", "legacy/haiku\nlegacy/sonnet\n")
+	}
+
+	h := &OpenCodeHost{Command: "opencode"}
+	sum, comp, err := h.DiscoverModels()
+	if err != nil {
+		t.Fatalf("DiscoverModels: %v", err)
+	}
+	if sum != "legacy/haiku" {
+		t.Errorf("summarizer = %q, want legacy/haiku", sum)
+	}
+	if comp != "legacy/sonnet" {
+		t.Errorf("companion = %q, want legacy/sonnet", comp)
+	}
+	if !reflect.DeepEqual(calls, [][]string{{"models"}, {"model", "ls"}}) {
+		t.Errorf("calls = %v, want [[models] [model ls]]", calls)
+	}
+}
+
+func TestMatchModel(t *testing.T) {
+	models := []string{
+		"tesco-anthropic/haiku-4.5",
+		"tesco-anthropic/opus-4.6",
+		"tesco-anthropic/sonnet-4.6",
+		"anthropic/claude-haiku-4-5-20251001",
+	}
+	cases := []struct {
+		patterns []string
+		want     string
+	}{
+		{[]string{"haiku"}, "tesco-anthropic/haiku-4.5"},
+		{[]string{"sonnet"}, "tesco-anthropic/sonnet-4.6"},
+		{[]string{"opus"}, "tesco-anthropic/opus-4.6"},
+		{[]string{"nonexistent"}, ""},
+		{[]string{"nonexistent", "haiku"}, "tesco-anthropic/haiku-4.5"},
+	}
+	for _, tc := range cases {
+		got := matchModel(models, tc.patterns)
+		if got != tc.want {
+			t.Errorf("matchModel(%v) = %q, want %q", tc.patterns, got, tc.want)
+		}
+	}
 }

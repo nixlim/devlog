@@ -91,7 +91,27 @@ func Install(args []string) int {
 	}
 	fmt.Fprintf(stdout(), "devlog: installed %s hooks\n", hostName)
 
-	if err := persistInstallConfig(*projectFlag, hostName, resolvedHostCommand, *summarizerModel, *companionModel); err != nil {
+	discoveredSummarizer, discoveredCompanion := "", ""
+	if d, ok := h.(host.ModelDiscoverer); ok && (*summarizerModel == "" || *companionModel == "") {
+		s, c, err := d.DiscoverModels()
+		if err == nil {
+			discoveredSummarizer, discoveredCompanion = s, c
+		} else {
+			fmt.Fprintf(stdout(), "devlog: warning: model auto-detection failed: %v\n", err)
+		}
+	}
+	effectiveSummarizer := *summarizerModel
+	if effectiveSummarizer == "" && discoveredSummarizer != "" {
+		effectiveSummarizer = discoveredSummarizer
+		fmt.Fprintf(stdout(), "devlog: auto-detected summarizer model: %s\n", discoveredSummarizer)
+	}
+	effectiveCompanion := *companionModel
+	if effectiveCompanion == "" && discoveredCompanion != "" {
+		effectiveCompanion = discoveredCompanion
+		fmt.Fprintf(stdout(), "devlog: auto-detected companion model: %s\n", discoveredCompanion)
+	}
+
+	if err := persistInstallConfig(*projectFlag, hostName, resolvedHostCommand, effectiveSummarizer, effectiveCompanion); err != nil {
 		printErr(err)
 		return 1
 	}

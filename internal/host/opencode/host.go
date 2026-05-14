@@ -5,6 +5,7 @@
 package opencode
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -128,6 +129,87 @@ func (h *OpenCodeHost) Uninstall(opts host.InstallOpts) error {
 	return nil
 }
 
+// modelPatterns maps devlog roles to ordered substring preferences used
+// by DiscoverModels to pick the best model from `opencode models`.
+// Each list is tried in order; the first model whose ID contains the
+// substring wins. This avoids hardcoding provider prefixes (anthropic/,
+// tesco-anthropic/, etc.) while still landing on the right tier.
+var modelPatterns = map[string][]string{
+	"summarizer": {"haiku-4.5", "haiku-4-5", "haiku"},
+	"companion":  {"sonnet-4.6", "sonnet-4-6", "sonnet"},
+}
+
+// listModelsCommand is indirected for tests.
+var listModelsCommand = func(cmd string, args ...string) *exec.Cmd {
+	return exec.Command(cmd, args...)
+}
+
+// DiscoverModels runs `opencode models` and picks the best summarizer
+// (haiku-class) and companion (sonnet-class) models from the output.
+// Returns empty strings for roles where no match is found — the caller
+// falls back to config defaults in that case.
+func (h *OpenCodeHost) DiscoverModels() (summarizer, companion string, err error) {
+	cmd := h.Command
+	if cmd == "" {
+		cmd = "opencode"
+	}
+
+	out, err := runModelList(cmd, "models")
+	if err != nil {
+		legacyOut, legacyErr := runModelList(cmd, "model", "ls")
+		if legacyErr != nil {
+			return "", "", fmt.Errorf("opencode models: %w; opencode model ls: %v", err, legacyErr)
+		}
+		out = legacyOut
+	}
+
+	models := parseModelList(out)
+	summarizer = matchModel(models, modelPatterns["summarizer"])
+	companion = matchModel(models, modelPatterns["companion"])
+	return summarizer, companion, nil
+}
+
+func runModelList(cmd string, args ...string) (string, error) {
+	c := listModelsCommand(cmd, args...)
+	var out, stderr bytes.Buffer
+	c.Stdout = &out
+	c.Stderr = &stderr
+	if err := c.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return "", fmt.Errorf("%w: %s", err, msg)
+		}
+		return "", err
+	}
+	return out.String(), nil
+}
+
+// parseModelList splits the output of `opencode models` into trimmed,
+// non-empty lines.
+func parseModelList(output string) []string {
+	var models []string
+	for _, line := range strings.Split(output, "\n") {
+		m := strings.TrimSpace(line)
+		if m != "" {
+			models = append(models, m)
+		}
+	}
+	return models
+}
+
+// matchModel returns the first model whose id contains one of the
+// patterns, tried in pattern order. Empty when no pattern matches.
+func matchModel(models []string, patterns []string) string {
+	for _, pat := range patterns {
+		for _, m := range models {
+			if strings.Contains(strings.ToLower(m), pat) {
+				return m
+			}
+		}
+	}
+	return ""
+}
+
 // execCommand is indirected for tests. Production is exec.CommandContext.
 var execCommand = exec.CommandContext
 
@@ -135,6 +217,11 @@ var execCommand = exec.CommandContext
 // and maps the response / failure modes onto host.Response and the
 // host-level sentinel errors. A zero timeout means "inherit the caller's
 // context deadline, if any".
+//
+// OpenCode's --format json emits NDJSON (one JSON object per line):
+// step_start, text (one or more), step_finish — and possibly error events.
+// This method parses each line, concatenates text parts, and extracts
+// metadata from step_finish.
 func (h *OpenCodeHost) RunLLM(ctx context.Context, model, prompt string, timeout time.Duration) (*host.Response, error) {
 	cmd := h.Command
 	if cmd == "" {
@@ -176,13 +263,115 @@ func (h *OpenCodeHost) RunLLM(ctx context.Context, model, prompt string, timeout
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("%w: stdout was empty", host.ErrEmptyResponse)
 	}
-	var resp host.Response
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("%w: %v", host.ErrInvalidJSON, err)
+
+	resp, parseErr := parseNDJSON(raw)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-	resp.Raw = append([]byte(nil), raw...)
 	if strings.TrimSpace(resp.Result) == "" {
 		return nil, fmt.Errorf("%w (stdout %d bytes)", host.ErrEmptyResponse, len(raw))
 	}
-	return &resp, nil
+	return resp, nil
+}
+
+// parseNDJSON parses the NDJSON streaming output from `opencode run
+// --format json`. Each line is a JSON event with a "type" discriminator.
+// Text is collected from "text" events; metadata comes from "step_finish".
+// An "error" event is surfaced as host.ErrNonZeroExit with the error
+// message.
+func parseNDJSON(data []byte) (*host.Response, error) {
+	var texts []string
+	var sessionID string
+	var model string
+	var durationMS int
+	var costUSD float64
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+
+		var event struct {
+			Type      string `json:"type"`
+			SessionID string `json:"sessionID"`
+			Error     *struct {
+				Name string `json:"name"`
+				Data struct {
+					Message string `json:"message"`
+				} `json:"data"`
+			} `json:"error"`
+			Part json.RawMessage `json:"part"`
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			continue
+		}
+		if event.SessionID != "" {
+			sessionID = event.SessionID
+		}
+
+		switch event.Type {
+		case "error":
+			msg := "unknown error"
+			if event.Error != nil && event.Error.Data.Message != "" {
+				msg = event.Error.Data.Message
+			}
+			return nil, &host.ExitError{ExitCode: 1, Stderr: msg}
+
+		case "text":
+			var part struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(event.Part, &part) == nil && part.Text != "" {
+				texts = append(texts, part.Text)
+			}
+
+		case "step_finish":
+			var part struct {
+				Cost   float64 `json:"cost"`
+				Tokens struct {
+					Total int `json:"total"`
+				} `json:"tokens"`
+			}
+			if json.Unmarshal(event.Part, &part) == nil {
+				costUSD += part.Cost
+			}
+		}
+	}
+
+	result := strings.Join(texts, "")
+	elapsed := 0
+	if len(data) > 0 {
+		var first, last struct {
+			Timestamp int64 `json:"timestamp"`
+		}
+		scanner2 := bufio.NewScanner(bytes.NewReader(data))
+		for scanner2.Scan() {
+			line := bytes.TrimSpace(scanner2.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			if first.Timestamp == 0 {
+				_ = json.Unmarshal(line, &first)
+			}
+			_ = json.Unmarshal(line, &last)
+		}
+		if first.Timestamp > 0 && last.Timestamp > 0 {
+			elapsed = int(last.Timestamp - first.Timestamp)
+			durationMS = elapsed
+		}
+	}
+
+	_ = model
+	return &host.Response{
+		Type:         "result",
+		Subtype:      "success",
+		Result:       result,
+		SessionID:    sessionID,
+		Model:        model,
+		DurationMS:   durationMS,
+		TotalCostUSD: costUSD,
+		Raw:          append([]byte(nil), data...),
+	}, nil
 }

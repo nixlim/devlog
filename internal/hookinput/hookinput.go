@@ -91,13 +91,18 @@ func parseOpenCode(kind string, raw []byte) (*Event, error) {
 	switch kind {
 	case "prompt", "chat.message", "UserPromptSubmit":
 		var payload struct {
-			Content   string `json:"content"`
-			SessionID string `json:"sessionId"`
+			Content      string `json:"content"`
+			SessionID    string `json:"sessionId"`
+			SessionIDalt string `json:"sessionID"`
 		}
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, fmt.Errorf("parse opencode chat.message: %w", err)
 		}
-		return &Event{SessionID: payload.SessionID, Prompt: payload.Content, Cwd: cwd}, nil
+		sid := payload.SessionID
+		if sid == "" {
+			sid = payload.SessionIDalt
+		}
+		return &Event{SessionID: sid, Prompt: payload.Content, Cwd: cwd}, nil
 
 	case "todo.updated", "event":
 		var envelope struct {

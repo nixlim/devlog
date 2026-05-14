@@ -79,6 +79,20 @@ func TestParseOpenCodeChatMessage(t *testing.T) {
 	}
 }
 
+func TestParseOpenCodeChatMessageCapitalID(t *testing.T) {
+	raw := []byte(`{"content":"fix the build","sessionID":"oc-sess-CAP"}`)
+	ev, err := Parse("opencode", "chat.message", raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if ev.SessionID != "oc-sess-CAP" {
+		t.Errorf("SessionID = %q, want oc-sess-CAP", ev.SessionID)
+	}
+	if ev.Prompt != "fix the build" {
+		t.Errorf("Prompt = %q", ev.Prompt)
+	}
+}
+
 func TestParseUnknownHost(t *testing.T) {
 	_, err := Parse("vscode", "pretool", []byte("{}"))
 	if err == nil {

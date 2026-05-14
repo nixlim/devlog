@@ -12,8 +12,17 @@ export const DevLog: Plugin = async ({ $ }) => ({
       await $`echo ${payload} | devlog capture`
     }
   },
-  "chat.message": async (input: any) => {
-    const payload = JSON.stringify({ ...input, cwd: process.cwd() })
+  "chat.message": async (input: any, output: any) => {
+    const parts = output?.parts ?? []
+    const content = parts
+      .filter((p: any) => p.type === "text" && !p.ignored)
+      .map((p: any) => p.text)
+      .join("\n")
+    const payload = JSON.stringify({
+      content,
+      sessionId: input.sessionID ?? input.sessionId,
+      cwd: process.cwd(),
+    })
     await $`echo ${payload} | devlog task-capture`
   },
   event: async ({ event }: any) => {
