@@ -3,7 +3,10 @@ import type { Plugin } from "@opencode-ai/plugin"
 export const DevLog: Plugin = async ({ $ }) => ({
   "tool.execute.before": async (input: any) => {
     const payload = JSON.stringify({ ...input, cwd: process.cwd() })
-    await $`echo ${payload} | devlog check-feedback`
+    const feedback = await $`echo ${payload} | devlog check-feedback`.text()
+    if (feedback.trim()) {
+      throw new Error(feedback)
+    }
   },
   "tool.execute.after": async (input: any, output: any) => {
     const captureTools = new Set(["edit", "write", "bash"])

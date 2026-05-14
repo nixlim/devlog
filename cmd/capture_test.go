@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"devlog/internal/buffer"
+	"devlog/internal/prompt"
 	"devlog/internal/state"
 	"devlog/internal/testutil"
 )
@@ -272,6 +273,46 @@ func TestCaptureBashWithTreeChangesRecordsDiff(t *testing.T) {
 	e := entries[0]
 	if !e.Changed {
 		t.Errorf("tree-mutating Bash should give Changed=true")
+	}
+}
+
+func TestCaptureIgnoresDevlogInternalBashCommand(t *testing.T) {
+	root := testutil.NewTempDevlogDir(t)
+	devlogDir := initDevlogAt(t, root)
+
+	payload := captureHookPayload(t, root, "Bash", map[string]any{
+		"command": "echo payload | devlog check-feedback",
+	})
+	withCaptureStdin(t, payload)
+	_, restore := noopFlushSpawner(t)
+	defer restore()
+
+	if rc := Capture(nil); rc != 0 {
+		t.Fatalf("rc = %d", rc)
+	}
+	entries := readBuffer(t, filepath.Join(devlogDir, "buffer.jsonl"))
+	if len(entries) != 0 {
+		t.Fatalf("expected no buffer entry for internal devlog command, got %d", len(entries))
+	}
+}
+
+func TestCaptureIgnoresGeneratedDevlogPromptBashCommand(t *testing.T) {
+	root := testutil.NewTempDevlogDir(t)
+	devlogDir := initDevlogAt(t, root)
+
+	payload := captureHookPayload(t, root, "Bash", map[string]any{
+		"command": prompt.BuildSummarizerPrompt("task", nil, []buffer.Entry{{Seq: 1, Tool: "Bash", Detail: "diff", Changed: true}}),
+	})
+	withCaptureStdin(t, payload)
+	_, restore := noopFlushSpawner(t)
+	defer restore()
+
+	if rc := Capture(nil); rc != 0 {
+		t.Fatalf("rc = %d", rc)
+	}
+	entries := readBuffer(t, filepath.Join(devlogDir, "buffer.jsonl"))
+	if len(entries) != 0 {
+		t.Fatalf("expected no buffer entry for generated prompt command, got %d", len(entries))
 	}
 }
 

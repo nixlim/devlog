@@ -18,4 +18,7 @@ func TestPluginSource(t *testing.T) {
 	if !strings.Contains(s, `"edit"`) || !strings.Contains(s, `"write"`) || !strings.Contains(s, `"bash"`) {
 		t.Error("PluginSource should filter tool.execute.after on edit/write/bash")
 	}
+	if !strings.Contains(s, "throw new Error(feedback)") {
+		t.Error("PluginSource should block the tool call when check-feedback emits feedback")
+	}
 }

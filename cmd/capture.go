@@ -17,6 +17,7 @@ import (
 	derrors "devlog/internal/errors"
 	"devlog/internal/git"
 	"devlog/internal/hookinput"
+	"devlog/internal/prompt"
 	"devlog/internal/state"
 )
 
@@ -210,6 +211,9 @@ func editDiffLines(oldStr, newStr string) int {
 // the caller can log them once — the buffer entry is still returned so
 // the agent's action is visible in the trajectory.
 func buildBashEntry(ev *hookinput.Event, cwd string, cfg *state.Config, now string) (*buffer.Entry, error) {
+	if isDevlogInternalBashCommand(ev.ToolInput.Command) {
+		return nil, nil
+	}
 	entry := &buffer.Entry{
 		TS:     now,
 		Tool:   "Bash",
@@ -248,6 +252,21 @@ func buildBashEntry(ev *hookinput.Event, cwd string, cfg *state.Config, now stri
 		entry.Detail = truncateRunes(combined, cfg.MaxDiffChars)
 	}
 	return entry, nil
+}
+
+func isDevlogInternalBashCommand(command string) bool {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, "devlog task-capture") ||
+		strings.Contains(trimmed, "devlog check-feedback") ||
+		strings.Contains(trimmed, "devlog task-tool-capture") ||
+		strings.Contains(trimmed, "devlog capture") {
+		return true
+	}
+	return strings.Contains(trimmed, prompt.SummarizerSystemPrompt) ||
+		strings.Contains(trimmed, prompt.CompanionSystemPrompt)
 }
 
 // truncateRunes returns s clipped to at most maxRunes characters. When
