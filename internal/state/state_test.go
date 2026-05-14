@@ -31,9 +31,11 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 		LogSeq:            8,
 		LogSinceCompanion: 3,
 		LastCompanion: &LastCompanion{
-			TS:         "2026-04-22T22:14:00Z",
-			Status:     "on_track",
-			Confidence: 0.92,
+			TS:               "2026-04-22T22:14:00Z",
+			Status:           "on_track",
+			Confidence:       0.92,
+			ThroughLogSeq:    7,
+			ThroughBufferSeq: 42,
 		},
 		FlushInProgress:     false,
 		CompanionInProgress: true,
@@ -59,7 +61,9 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	}
 	if got.LastCompanion == nil ||
 		got.LastCompanion.Status != "on_track" ||
-		got.LastCompanion.Confidence != 0.92 {
+		got.LastCompanion.Confidence != 0.92 ||
+		got.LastCompanion.ThroughLogSeq != 7 ||
+		got.LastCompanion.ThroughBufferSeq != 42 {
 		t.Errorf("LastCompanion lost in roundtrip: %+v", got.LastCompanion)
 	}
 }

@@ -24,9 +24,11 @@ import (
 
 // LastCompanion is the most recent companion verdict embedded in state.json.
 type LastCompanion struct {
-	TS         string  `json:"ts"`
-	Status     string  `json:"status"`
-	Confidence float64 `json:"confidence"`
+	TS               string  `json:"ts"`
+	Status           string  `json:"status"`
+	Confidence       float64 `json:"confidence"`
+	ThroughLogSeq    int     `json:"through_log_seq,omitempty"`
+	ThroughBufferSeq int     `json:"through_buffer_seq,omitempty"`
 }
 
 // State mirrors the on-disk .devlog/state.json schema from SPEC.md.

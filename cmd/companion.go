@@ -57,6 +57,13 @@ func Companion(args []string) int {
 	devlogDir := filepath.Join(root, ".devlog")
 	statePath := filepath.Join(devlogDir, "state.json")
 	configPath := filepath.Join(devlogDir, "config.json")
+	st, err := state.Load(statePath)
+	if err != nil && os.IsNotExist(err) {
+		st = &state.State{}
+	} else if err != nil {
+		printErr(derrors.Wrap("companion", "read state", err))
+		return 1
+	}
 
 	cfg, err := state.LoadConfig(configPath)
 	if err != nil {
@@ -71,7 +78,7 @@ func Companion(args []string) int {
 		return 0
 	}
 
-	input, err := buildCompanionInput(devlogDir, cfg)
+	input, err := buildCompanionInput(devlogDir, cfg, st)
 	if err != nil {
 		printErr(err)
 		return 1
@@ -125,7 +132,7 @@ func Companion(args []string) int {
 		return 1
 	}
 
-	if err := commitCompanionResult(statePath, result); err != nil {
+	if err := commitCompanionResult(statePath, result, st.LogSeq, st.BufferSeq); err != nil {
 		recordHookError(filepath.Join(devlogDir, "errors.log"), "companion", err)
 		printErr(err)
 		return 1
@@ -191,12 +198,14 @@ func releaseCompanionGuard(statePath string) {
 // since last companion" counter. The reset happens only on success — a
 // failed run leaves the counter alone so the next flush threshold crossing
 // will retry the assessment.
-func commitCompanionResult(statePath string, r feedback.CompanionResult) error {
+func commitCompanionResult(statePath string, r feedback.CompanionResult, throughLogSeq, throughBufferSeq int) error {
 	return state.Update(statePath, func(s *state.State) error {
 		s.LastCompanion = &state.LastCompanion{
-			TS:         time.Now().UTC().Format(time.RFC3339),
-			Status:     r.Status,
-			Confidence: r.Confidence,
+			TS:               time.Now().UTC().Format(time.RFC3339),
+			Status:           r.Status,
+			Confidence:       r.Confidence,
+			ThroughLogSeq:    throughLogSeq,
+			ThroughBufferSeq: throughBufferSeq,
 		}
 		s.LogSinceCompanion = 0
 		return nil
@@ -206,7 +215,7 @@ func commitCompanionResult(statePath string, r feedback.CompanionResult) error {
 // buildCompanionInput gathers every input the prompt builder needs. Every
 // file is optional: a missing file means the corresponding section renders
 // as "(none)".
-func buildCompanionInput(devlogDir string, cfg *state.Config) (prompt.CompanionInput, error) {
+func buildCompanionInput(devlogDir string, cfg *state.Config, st *state.State) (prompt.CompanionInput, error) {
 	var in prompt.CompanionInput
 
 	task, err := readStringFile(filepath.Join(devlogDir, "task.md"))
@@ -221,7 +230,7 @@ func buildCompanionInput(devlogDir string, cfg *state.Config) (prompt.CompanionI
 	}
 	in.Updates = updates
 
-	logEntries, err := devlog.ReadLastN(filepath.Join(devlogDir, "log.jsonl"), cfg.CompanionLogEntries)
+	logEntries, err := readUnadvisedLogs(filepath.Join(devlogDir, "log.jsonl"), cfg.CompanionLogEntries, advisedThroughLogSeq(st))
 	if err != nil {
 		return in, err
 	}
@@ -231,7 +240,7 @@ func buildCompanionInput(devlogDir string, cfg *state.Config) (prompt.CompanionI
 	if err != nil {
 		return in, derrors.Wrap("companion", "read buffer_archive.jsonl", err)
 	}
-	in.DiffArchive = tailBufferEntries(archEntries, cfg.CompanionDiffEntries)
+	in.DiffArchive = tailBufferEntries(filterBufferAfterSeq(archEntries, advisedThroughBufferSeq(st)), cfg.CompanionDiffEntries)
 
 	tasks, err := readTaskList(filepath.Join(devlogDir, "tasks.jsonl"))
 	if err != nil {
@@ -242,6 +251,60 @@ func buildCompanionInput(devlogDir string, cfg *state.Config) (prompt.CompanionI
 	in.MaxLogEntries = cfg.CompanionLogEntries
 	in.MaxDiffEntries = cfg.CompanionDiffEntries
 	return in, nil
+}
+
+func advisedThroughLogSeq(st *state.State) int {
+	if st == nil || st.LastCompanion == nil {
+		return 0
+	}
+	if st.LastCompanion.ThroughLogSeq > 0 {
+		return st.LastCompanion.ThroughLogSeq
+	}
+	seq := st.LogSeq - st.LogSinceCompanion
+	if seq < 0 {
+		return 0
+	}
+	return seq
+}
+
+func advisedThroughBufferSeq(st *state.State) int {
+	if st == nil || st.LastCompanion == nil {
+		return 0
+	}
+	if st.LastCompanion.ThroughBufferSeq > 0 {
+		return st.LastCompanion.ThroughBufferSeq
+	}
+	return st.BufferSeq
+}
+
+func readUnadvisedLogs(path string, n, afterSeq int) ([]devlog.Entry, error) {
+	entries, err := devlog.ReadLastN(path, n)
+	if err != nil {
+		return nil, err
+	}
+	if afterSeq <= 0 || len(entries) == 0 {
+		return entries, nil
+	}
+	out := entries[:0]
+	for _, entry := range entries {
+		if entry.Seq > afterSeq {
+			out = append(out, entry)
+		}
+	}
+	return out, nil
+}
+
+func filterBufferAfterSeq(entries []buffer.Entry, afterSeq int) []buffer.Entry {
+	if afterSeq <= 0 || len(entries) == 0 {
+		return entries
+	}
+	out := entries[:0]
+	for _, entry := range entries {
+		if entry.Seq > afterSeq {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // readStringFile returns the contents of path, or "" if the file does not

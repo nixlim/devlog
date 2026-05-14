@@ -352,7 +352,7 @@ func TestCommitCompanionResult_ResetsCounter(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	r := feedback.CompanionResult{Status: "spiraling", Confidence: 0.9}
-	if err := commitCompanionResult(statePath, r); err != nil {
+	if err := commitCompanionResult(statePath, r, 42, 99); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 	s, err := state.Load(statePath)
@@ -364,5 +364,39 @@ func TestCommitCompanionResult_ResetsCounter(t *testing.T) {
 	}
 	if s.LastCompanion == nil || s.LastCompanion.Status != "spiraling" {
 		t.Errorf("last_companion not updated: %+v", s.LastCompanion)
+	}
+	if s.LastCompanion == nil || s.LastCompanion.ThroughLogSeq != 42 {
+		t.Errorf("last_companion.through_log_seq = %v, want 42", s.LastCompanion)
+	}
+	if s.LastCompanion == nil || s.LastCompanion.ThroughBufferSeq != 99 {
+		t.Errorf("last_companion.through_buffer_seq = %v, want 99", s.LastCompanion)
+	}
+}
+
+func TestBuildCompanionInputSkipsAlreadyAdvisedLogs(t *testing.T) {
+	root := testutil.NewTempDevlogDir(t)
+	devlogDir := seedProject(t, root)
+	logPath := filepath.Join(devlogDir, "log.jsonl")
+	if err := devlog.Append(logPath, devlog.Entry{Seq: 2, TS: time.Now().UTC(), Summary: "old already advised loop"}); err != nil {
+		t.Fatalf("append old log: %v", err)
+	}
+	if err := devlog.Append(logPath, devlog.Entry{Seq: 3, TS: time.Now().UTC(), Summary: "new build health check investigation"}); err != nil {
+		t.Fatalf("append new log: %v", err)
+	}
+
+	in, err := buildCompanionInput(devlogDir, state.Default(), &state.State{
+		LastCompanion: &state.LastCompanion{ThroughLogSeq: 2},
+	})
+	if err != nil {
+		t.Fatalf("buildCompanionInput: %v", err)
+	}
+	if len(in.LogEntries) != 1 {
+		t.Fatalf("LogEntries len = %d, want 1", len(in.LogEntries))
+	}
+	if in.LogEntries[0].Seq != 3 {
+		t.Errorf("LogEntries[0].Seq = %d, want 3", in.LogEntries[0].Seq)
+	}
+	if strings.Contains(in.LogEntries[0].Summary, "old already advised") {
+		t.Errorf("included already advised log: %+v", in.LogEntries[0])
 	}
 }
