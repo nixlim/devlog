@@ -107,6 +107,34 @@ func TestBuildCompanionPromptIncludesUserUpdates(t *testing.T) {
 	}
 }
 
+func TestBuildCompanionPromptLimitsUserUpdates(t *testing.T) {
+	var updates []UserUpdate
+	for i := 1; i <= 40; i++ {
+		updates = append(updates, UserUpdate{TS: "2026-04-22T22:10:00Z", Prompt: "update-" + itoa(i)})
+	}
+	got := BuildCompanionPrompt(CompanionInput{Task: "t", Updates: updates})
+	if strings.Contains(got, "update-1\n") || strings.Contains(got, "update-15") {
+		t.Errorf("expected oldest updates to be trimmed")
+	}
+	if !strings.Contains(got, "update-16") || !strings.Contains(got, "update-40") {
+		t.Errorf("expected newest 25 updates to be kept")
+	}
+}
+
+func TestBuildCompanionPromptTruncatesLongUserUpdates(t *testing.T) {
+	long := strings.Repeat("x", DefaultMaxUpdateChars+100)
+	got := BuildCompanionPrompt(CompanionInput{
+		Task:    "t",
+		Updates: []UserUpdate{{TS: "2026-04-22T22:10:00Z", Prompt: long}},
+	})
+	if !strings.Contains(got, "[truncated]") {
+		t.Errorf("expected long update to be truncated")
+	}
+	if strings.Contains(got, strings.Repeat("x", DefaultMaxUpdateChars+1)) {
+		t.Errorf("prompt includes more than the update char limit")
+	}
+}
+
 func TestBuildCompanionPromptIncludesLogEntries(t *testing.T) {
 	base := time.Date(2026, 4, 22, 22, 15, 0, 0, time.UTC)
 	in := CompanionInput{
@@ -201,6 +229,20 @@ func TestBuildCompanionPromptDiffLimitDefaultsToFifty(t *testing.T) {
 	got := BuildCompanionPrompt(CompanionInput{Task: "t", DiffArchive: entries})
 	if !strings.Contains(got, "#51 [") || !strings.Contains(got, "#100 [") {
 		t.Errorf("default diff limit should keep seqs 51..100")
+	}
+}
+
+func TestBuildCompanionPromptTruncatesLongDiffs(t *testing.T) {
+	long := strings.Repeat("x", DefaultMaxDiffChars+100)
+	got := BuildCompanionPrompt(CompanionInput{
+		Task:        "t",
+		DiffArchive: []buffer.Entry{{Seq: 1, Tool: "Bash", Changed: true, Detail: long}},
+	})
+	if !strings.Contains(got, "[truncated]") {
+		t.Errorf("expected long diff to be truncated")
+	}
+	if strings.Contains(got, strings.Repeat("x", DefaultMaxDiffChars+1)) {
+		t.Errorf("prompt includes more than the diff char limit")
 	}
 }
 

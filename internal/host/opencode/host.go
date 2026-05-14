@@ -213,7 +213,7 @@ func matchModel(models []string, patterns []string) string {
 // execCommand is indirected for tests. Production is exec.CommandContext.
 var execCommand = exec.CommandContext
 
-// RunLLM invokes `opencode run --format json --model <model> <prompt>`
+// RunLLM invokes `opencode run --format json --model <model>`
 // and maps the response / failure modes onto host.Response and the
 // host-level sentinel errors. A zero timeout means "inherit the caller's
 // context deadline, if any".
@@ -237,8 +237,9 @@ func (h *OpenCodeHost) RunLLM(ctx context.Context, model, prompt string, timeout
 		defer cancel()
 	}
 
-	args := []string{"run", "--format", "json", "--model", normalized, prompt}
+	args := []string{"run", "--pure", "--format", "json", "--model", normalized}
 	c := execCommand(runCtx, cmd, args...)
+	c.Stdin = strings.NewReader(prompt)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr

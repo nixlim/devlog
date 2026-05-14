@@ -70,6 +70,15 @@ const (
 	DefaultMaxLogEntries = 25
 	// DefaultMaxDiffEntries mirrors the SPEC's companion_diff_entries=50.
 	DefaultMaxDiffEntries = 50
+	// DefaultMaxUpdates keeps long-running sessions from replaying every
+	// captured user prompt back into the companion context forever.
+	DefaultMaxUpdates = 25
+	// DefaultMaxUpdateChars bounds each update; OpenCode hook bugs can echo
+	// entire DevLog prompts back into task_updates.jsonl.
+	DefaultMaxUpdateChars = 2000
+	// DefaultMaxDiffChars bounds each raw diff entry so the companion sees
+	// recent evidence without exceeding model context on large diffs.
+	DefaultMaxDiffChars = 4000
 )
 
 // CompanionSystemPrompt is the verbatim SPEC companion system prompt,
@@ -139,7 +148,7 @@ func BuildCompanionPrompt(in CompanionInput) string {
 	b.WriteString("\n\n")
 
 	b.WriteString("USER UPDATES:\n")
-	b.WriteString(renderUpdates(in.Updates))
+	b.WriteString(renderUpdates(tailUpdates(in.Updates, DefaultMaxUpdates)))
 	b.WriteString("\n\n")
 
 	b.WriteString("DEV LOG:\n")
@@ -157,6 +166,13 @@ func BuildCompanionPrompt(in CompanionInput) string {
 	b.WriteString(companionOutputSpec)
 	b.WriteString("\n")
 	return b.String()
+}
+
+func tailUpdates(s []UserUpdate, n int) []UserUpdate {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 // renderTask returns the verbatim task text with "(none)" as a stand-in
@@ -182,7 +198,7 @@ func renderUpdates(updates []UserUpdate) string {
 	}
 	var b strings.Builder
 	for i, u := range updates {
-		fmt.Fprintf(&b, "%d. [%s] %s", i+1, u.TS, strings.TrimSpace(u.Prompt))
+		fmt.Fprintf(&b, "%d. [%s] %s", i+1, u.TS, truncateText(strings.TrimSpace(u.Prompt), DefaultMaxUpdateChars))
 		if i < len(updates)-1 {
 			b.WriteString("\n")
 		}
@@ -224,13 +240,20 @@ func renderDiffArchive(entries []buffer.Entry) string {
 			b.WriteString(" (no change)")
 		}
 		if e.Detail != "" {
-			fmt.Fprintf(&b, "\n    %s", strings.TrimSpace(e.Detail))
+			fmt.Fprintf(&b, "\n    %s", truncateText(strings.TrimSpace(e.Detail), DefaultMaxDiffChars))
 		}
 		if i < len(entries)-1 {
 			b.WriteString("\n")
 		}
 	}
 	return b.String()
+}
+
+func truncateText(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n    ... [truncated]"
 }
 
 // renderTaskList stringifies task tool captures. Each record's payload is

@@ -124,7 +124,7 @@ func TestRunLLMArgv(t *testing.T) {
 	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		capturedName = name
 		capturedArgs = append([]string(nil), args...)
-		return exec.CommandContext(ctx, "printf", "%s", ndjson)
+		return exec.CommandContext(ctx, "sh", "-c", `input=$(cat); test "$input" = summarize || exit 23; printf '%s' "$1"`, "sh", ndjson)
 	}
 	h := &OpenCodeHost{Command: "opencode"}
 	resp, err := h.RunLLM(context.Background(), "claude-haiku-4-5-20251001", "summarize", 10*time.Second)
@@ -137,7 +137,7 @@ func TestRunLLMArgv(t *testing.T) {
 	if capturedName != "opencode" {
 		t.Errorf("name = %q, want %q", capturedName, "opencode")
 	}
-	wantArgs := []string{"run", "--format", "json", "--model", "anthropic/claude-haiku-4-5-20251001", "summarize"}
+	wantArgs := []string{"run", "--pure", "--format", "json", "--model", "anthropic/claude-haiku-4-5-20251001"}
 	if !reflect.DeepEqual(capturedArgs, wantArgs) {
 		t.Errorf("args = %v, want %v", capturedArgs, wantArgs)
 	}
