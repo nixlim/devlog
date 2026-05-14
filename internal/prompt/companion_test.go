@@ -107,31 +107,17 @@ func TestBuildCompanionPromptIncludesUserUpdates(t *testing.T) {
 	}
 }
 
-func TestBuildCompanionPromptLimitsUserUpdates(t *testing.T) {
+func TestBuildCompanionPromptKeepsAllUserUpdates(t *testing.T) {
 	var updates []UserUpdate
 	for i := 1; i <= 40; i++ {
-		updates = append(updates, UserUpdate{TS: "2026-04-22T22:10:00Z", Prompt: "update-" + itoa(i)})
+		updates = append(updates, UserUpdate{TS: "2026-04-22T22:10:00Z", Prompt: "genuine update " + itoa(i)})
 	}
 	got := BuildCompanionPrompt(CompanionInput{Task: "t", Updates: updates})
-	if strings.Contains(got, "update-1\n") || strings.Contains(got, "update-15") {
-		t.Errorf("expected oldest updates to be trimmed")
-	}
-	if !strings.Contains(got, "update-16") || !strings.Contains(got, "update-40") {
-		t.Errorf("expected newest 25 updates to be kept")
-	}
-}
-
-func TestBuildCompanionPromptTruncatesLongUserUpdates(t *testing.T) {
-	long := strings.Repeat("x", DefaultMaxUpdateChars+100)
-	got := BuildCompanionPrompt(CompanionInput{
-		Task:    "t",
-		Updates: []UserUpdate{{TS: "2026-04-22T22:10:00Z", Prompt: long}},
-	})
-	if !strings.Contains(got, "[truncated]") {
-		t.Errorf("expected long update to be truncated")
-	}
-	if strings.Contains(got, strings.Repeat("x", DefaultMaxUpdateChars+1)) {
-		t.Errorf("prompt includes more than the update char limit")
+	for i := 1; i <= 40; i++ {
+		want := "genuine update " + itoa(i)
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt missing user update %q", want)
+		}
 	}
 }
 

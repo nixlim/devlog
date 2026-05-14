@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"devlog/internal/buffer"
+	"devlog/internal/prompt"
 )
 
 // withStdinFile writes stdinJSON to a temp file and arranges for
@@ -195,6 +198,47 @@ func TestTaskCaptureMultipleUpdatesAppendOrder(t *testing.T) {
 	}
 }
 
+func TestTaskCaptureSkipsGeneratedSummarizerPrompt(t *testing.T) {
+	root := t.TempDir()
+	seedTask(t, root)
+	generated := prompt.BuildSummarizerPrompt("original task", nil, []buffer.Entry{{Seq: 1, Tool: "Bash", Detail: "git diff", Changed: true}})
+
+	withStdinFile(t, makePayload(t, root, generated, "sess-abc"))
+	withStreams(t)
+	if code := TaskCapture(nil); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	assertNoTaskUpdates(t, root)
+}
+
+func TestTaskCaptureSkipsGeneratedCompanionPrompt(t *testing.T) {
+	root := t.TempDir()
+	seedTask(t, root)
+	generated := prompt.BuildCompanionPrompt(prompt.CompanionInput{Task: "original task"})
+
+	withStdinFile(t, makePayload(t, root, generated, "sess-abc"))
+	withStreams(t)
+	if code := TaskCapture(nil); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	assertNoTaskUpdates(t, root)
+}
+
+func TestTaskCaptureSkipsDevlogMaintenanceCommands(t *testing.T) {
+	for _, cmd := range []string{"devlog flush", "devlog flush --dry-run", "devlog companion", "devlog companion --dry-run"} {
+		t.Run(cmd, func(t *testing.T) {
+			root := t.TempDir()
+			seedTask(t, root)
+			withStdinFile(t, makePayload(t, root, cmd, "sess-abc"))
+			withStreams(t)
+			if code := TaskCapture(nil); code != 0 {
+				t.Fatalf("exit = %d", code)
+			}
+			assertNoTaskUpdates(t, root)
+		})
+	}
+}
+
 func TestTaskCaptureCreatesDevlogDirIfMissing(t *testing.T) {
 	root := t.TempDir()
 	// Intentionally do NOT create .devlog/ — the hook should recover.
@@ -312,5 +356,22 @@ func TestTaskCaptureMalformedJSONExitsZero(t *testing.T) {
 	logPath := filepath.Join(root, ".devlog", "errors.log")
 	if _, err := os.Stat(logPath); err != nil {
 		t.Errorf("errors.log should be written on malformed input: %v", err)
+	}
+}
+
+func seedTask(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".devlog"), 0o755); err != nil {
+		t.Fatalf("mkdir .devlog: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".devlog", "task.md"), []byte("original task\n"), 0o644); err != nil {
+		t.Fatalf("seed task.md: %v", err)
+	}
+}
+
+func assertNoTaskUpdates(t *testing.T, root string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(root, ".devlog", "task_updates.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("task_updates.jsonl should not exist: %v", err)
 	}
 }

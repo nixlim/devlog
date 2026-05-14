@@ -11,6 +11,7 @@ import (
 
 	derrors "devlog/internal/errors"
 	"devlog/internal/hookinput"
+	"devlog/internal/prompt"
 	"devlog/internal/state"
 )
 
@@ -72,6 +73,9 @@ func TaskCapture(args []string) int {
 			derrors.New("task-capture", "received UserPromptSubmit payload without a prompt field"))
 		return 0
 	}
+	if isGeneratedDevlogPrompt(ev.Prompt) || isDevlogMaintenanceCommand(ev.Prompt) {
+		return 0
+	}
 
 	if err := os.MkdirAll(devlogDir, 0o755); err != nil {
 		logNonFatal(errorsLog, derrors.Wrap("task-capture",
@@ -101,6 +105,39 @@ func TaskCapture(args []string) int {
 		return 0
 	}
 	return 0
+}
+
+func isGeneratedDevlogPrompt(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, prompt.SummarizerSystemPrompt) &&
+		strings.Contains(trimmed, "\nBUFFERED DIFFS:\n") {
+		return true
+	}
+	if strings.Contains(trimmed, prompt.CompanionSystemPrompt) {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "ORIGINAL TASK:\n") &&
+		strings.Contains(trimmed, "\nUSER UPDATES:\n") &&
+		strings.Contains(trimmed, "\nDEV LOG:\n") &&
+		strings.Contains(trimmed, "\nRAW DIFFS:\n") &&
+		strings.Contains(trimmed, "\nTASK LIST:\n") &&
+		strings.Contains(trimmed, "Respond ONLY with a single JSON object")
+}
+
+func isDevlogMaintenanceCommand(s string) bool {
+	fields := strings.Fields(strings.TrimSpace(s))
+	if len(fields) < 2 {
+		return false
+	}
+	cmd := strings.Trim(fields[0], "`'\"")
+	subcmd := strings.Trim(fields[1], "`'\"")
+	if filepath.Base(cmd) != "devlog" {
+		return false
+	}
+	return subcmd == "flush" || subcmd == "companion"
 }
 
 // resolveDevlogDir picks the devlog directory. Prefers the hook's cwd

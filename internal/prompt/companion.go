@@ -70,12 +70,6 @@ const (
 	DefaultMaxLogEntries = 25
 	// DefaultMaxDiffEntries mirrors the SPEC's companion_diff_entries=50.
 	DefaultMaxDiffEntries = 50
-	// DefaultMaxUpdates keeps long-running sessions from replaying every
-	// captured user prompt back into the companion context forever.
-	DefaultMaxUpdates = 25
-	// DefaultMaxUpdateChars bounds each update; OpenCode hook bugs can echo
-	// entire DevLog prompts back into task_updates.jsonl.
-	DefaultMaxUpdateChars = 2000
 	// DefaultMaxDiffChars bounds each raw diff entry so the companion sees
 	// recent evidence without exceeding model context on large diffs.
 	DefaultMaxDiffChars = 4000
@@ -148,7 +142,7 @@ func BuildCompanionPrompt(in CompanionInput) string {
 	b.WriteString("\n\n")
 
 	b.WriteString("USER UPDATES:\n")
-	b.WriteString(renderUpdates(tailUpdates(in.Updates, DefaultMaxUpdates)))
+	b.WriteString(renderUpdates(in.Updates))
 	b.WriteString("\n\n")
 
 	b.WriteString("DEV LOG:\n")
@@ -166,13 +160,6 @@ func BuildCompanionPrompt(in CompanionInput) string {
 	b.WriteString(companionOutputSpec)
 	b.WriteString("\n")
 	return b.String()
-}
-
-func tailUpdates(s []UserUpdate, n int) []UserUpdate {
-	if n <= 0 || len(s) <= n {
-		return s
-	}
-	return s[len(s)-n:]
 }
 
 // renderTask returns the verbatim task text with "(none)" as a stand-in
@@ -198,7 +185,7 @@ func renderUpdates(updates []UserUpdate) string {
 	}
 	var b strings.Builder
 	for i, u := range updates {
-		fmt.Fprintf(&b, "%d. [%s] %s", i+1, u.TS, truncateText(strings.TrimSpace(u.Prompt), DefaultMaxUpdateChars))
+		fmt.Fprintf(&b, "%d. [%s] %s", i+1, u.TS, strings.TrimSpace(u.Prompt))
 		if i < len(updates)-1 {
 			b.WriteString("\n")
 		}
