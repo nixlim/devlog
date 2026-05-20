@@ -276,6 +276,90 @@ func TestCaptureBashWithTreeChangesRecordsDiff(t *testing.T) {
 	}
 }
 
+func TestCaptureBashDedupsDirtyWorktree(t *testing.T) {
+	root := testutil.NewTempDevlogDir(t)
+	filePath := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(filePath, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "init")
+	if err := os.WriteFile(filePath, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	devlogDir := initDevlogAt(t, root)
+	_, restore := noopFlushSpawner(t)
+	defer restore()
+
+	payload := captureHookPayload(t, root, "Bash", map[string]any{
+		"command": "echo first",
+	})
+	withCaptureStdin(t, payload)
+	if rc := Capture(nil); rc != 0 {
+		t.Fatalf("rc = %d", rc)
+	}
+
+	payload = captureHookPayload(t, root, "Bash", map[string]any{
+		"command": "echo second",
+	})
+	withCaptureStdin(t, payload)
+	if rc := Capture(nil); rc != 0 {
+		t.Fatalf("rc = %d", rc)
+	}
+
+	entries := readBuffer(t, filepath.Join(devlogDir, "buffer.jsonl"))
+	if len(entries) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(entries))
+	}
+	if !entries[0].Changed {
+		t.Errorf("first Bash entry should be Changed=true")
+	}
+	if entries[1].Changed {
+		t.Errorf("second Bash entry should be Changed=false (dirty worktree dedup)")
+	}
+	if !strings.Contains(entries[1].Detail, "echo second") {
+		t.Errorf("deduped entry should still contain the command, got %q", entries[1].Detail)
+	}
+
+	if err := os.WriteFile(filePath, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("modify again: %v", err)
+	}
+	payload = captureHookPayload(t, root, "Bash", map[string]any{
+		"command": "echo third",
+	})
+	withCaptureStdin(t, payload)
+	if rc := Capture(nil); rc != 0 {
+		t.Fatalf("rc = %d", rc)
+	}
+
+	entries = readBuffer(t, filepath.Join(devlogDir, "buffer.jsonl"))
+	if len(entries) != 3 {
+		t.Fatalf("want 3 entries, got %d", len(entries))
+	}
+	if !entries[2].Changed {
+		t.Errorf("third entry (after new change) should be Changed=true")
+	}
+}
+
+func TestCaptureIgnoresEmptyEditPayload(t *testing.T) {
+	root := testutil.NewTempDevlogDir(t)
+	devlogDir := initDevlogAt(t, root)
+
+	payload := captureHookPayload(t, root, "Edit", map[string]any{})
+	withCaptureStdin(t, payload)
+	_, restore := noopFlushSpawner(t)
+	defer restore()
+
+	if rc := Capture(nil); rc != 0 {
+		t.Fatalf("rc = %d", rc)
+	}
+	entries := readBuffer(t, filepath.Join(devlogDir, "buffer.jsonl"))
+	if len(entries) != 0 {
+		t.Fatalf("expected no buffer entry for empty Edit payload, got %d", len(entries))
+	}
+}
+
 func TestCaptureIgnoresDevlogInternalBashCommand(t *testing.T) {
 	root := testutil.NewTempDevlogDir(t)
 	devlogDir := initDevlogAt(t, root)

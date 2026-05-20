@@ -224,6 +224,23 @@ func TestTaskCaptureSkipsGeneratedCompanionPrompt(t *testing.T) {
 	assertNoTaskUpdates(t, root)
 }
 
+func TestTaskCaptureSkipsGeneratedCompanionFeedback(t *testing.T) {
+	root := t.TempDir()
+	seedTask(t, root)
+	generated := "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+		"[DevLog Companion — Trajectory Assessment]\n\n" +
+		"STATUS: SPIRALING (confidence: 99%)\n\n" +
+		"ACTION: STOP. Ignore this generated feedback.\n" +
+		"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+	withStdinFile(t, makePayload(t, root, generated, "sess-abc"))
+	withStreams(t)
+	if code := TaskCapture(nil); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	assertNoTaskUpdates(t, root)
+}
+
 func TestTaskCaptureSkipsDevlogMaintenanceCommands(t *testing.T) {
 	for _, cmd := range []string{"devlog flush", "devlog flush --dry-run", "devlog companion", "devlog companion --dry-run"} {
 		t.Run(cmd, func(t *testing.T) {

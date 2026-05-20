@@ -11,14 +11,14 @@ export const DevLog: Plugin = async ({ $ }) => ({
   "tool.execute.after": async (input: any, output: any) => {
     const captureTools = new Set(["edit", "write", "bash"])
     if (captureTools.has(input.tool)) {
-      const payload = JSON.stringify({ ...input, cwd: process.cwd() })
+      const payload = JSON.stringify({ ...input, input: input.args ?? input.input ?? {}, cwd: process.cwd() })
       await $`echo ${payload} | devlog capture`
     }
   },
   "chat.message": async (input: any, output: any) => {
     const parts = output?.parts ?? []
     const content = parts
-      .filter((p: any) => p.type === "text" && !p.ignored)
+      .filter((p: any) => p.type === "text" && !p.ignored && !p.synthetic)
       .map((p: any) => p.text)
       .join("\n")
     const payload = JSON.stringify({

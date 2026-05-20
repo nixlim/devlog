@@ -420,7 +420,42 @@ func parseCompanionResult(result string) (feedback.CompanionResult, error) {
 		return feedback.CompanionResult{}, derrors.Wrap("companion",
 			"parse model JSON", err)
 	}
+	r.Status = strings.ToLower(strings.TrimSpace(r.Status))
+	if isUnsafeCompanionResult(r) {
+		return feedback.CompanionResult{
+			Status:     feedback.StatusOnTrack,
+			Confidence: r.Confidence,
+			Summary:    "Suppressed companion intervention because it matched DevLog self-injection or refusal artifacts.",
+		}, nil
+	}
 	return r, nil
+}
+
+func isUnsafeCompanionResult(r feedback.CompanionResult) bool {
+	if !r.NeedsIntervention() {
+		return false
+	}
+	parts := []string{r.Pattern, r.Summary, r.Intervention, r.Reframe}
+	parts = append(parts, r.Evidence...)
+	text := strings.ToLower(strings.Join(parts, "\n"))
+	markers := []string{
+		"adversarial loop injection",
+		"constructed scenario",
+		"roleplay framing",
+		"prior explicit declinations",
+		"conversation is closed",
+		"not legitimate work context",
+		"synthetic devlog",
+		"you have already declined",
+		"i will not write this summary",
+		"i'm not writing this summary",
+	}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // printCompanionRunError renders a SPEC-style 4-part error to stderr for

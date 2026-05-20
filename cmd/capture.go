@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,17 +90,18 @@ func Capture(args []string) int {
 		cwd = ev.Cwd
 	}
 
-	entry, err := buildBufferEntry(ev, cwd, cfg)
+	result, err := buildBufferEntry(ev, cwd, cfg)
 	if err != nil {
 		captureLogNonFatal(errorsLog, err)
 		return 0
 	}
-	if entry == nil {
+	if result == nil {
 		// Tool is not one we buffer (e.g. the capture hook matcher was
 		// widened beyond Edit|Write|Bash).
 		return 0
 	}
 
+	entry := result.entry
 	bufferPath := filepath.Join(devlogDir, "buffer.jsonl")
 	statePath := filepath.Join(devlogDir, "state.json")
 
@@ -107,6 +110,20 @@ func Capture(args []string) int {
 	// inside the lock so that seq is only persisted on successful write.
 	var shouldFlush bool
 	err = state.Update(statePath, func(s *state.State) error {
+		// Dedup: if this Bash entry's diff is identical to the last one
+		// captured, the working tree hasn't actually changed — it's a
+		// dirty worktree being re-observed. Mark it unchanged so the
+		// companion doesn't misinterpret repeated identical diffs as a
+		// looping agent.
+		if entry.Tool == "Bash" && entry.Changed && result.diffHash != "" {
+			if result.diffHash == s.LastDiffHash {
+				entry.Changed = false
+				entry.Detail = truncateRunes(flattenWS(ev.ToolInput.Command), cfg.MaxDetailChars)
+				entry.DiffLines = 0
+			}
+			s.LastDiffHash = result.diffHash
+		}
+
 		s.BufferSeq++
 		entry.Seq = s.BufferSeq
 		if entry.SessionID == "" {
@@ -145,34 +162,47 @@ func Capture(args []string) int {
 	return 0
 }
 
+// captureResult wraps a buffer entry with optional metadata used by the
+// capture logic but not persisted in the buffer itself.
+type captureResult struct {
+	entry    *buffer.Entry
+	diffHash string
+}
+
 // buildBufferEntry maps a hookinput Event into a buffer.Entry. cwd is
 // the project root used by Bash entries to run `git diff`. Returns
 // (nil, nil) for tools we ignore so the caller can short-circuit without
 // special-casing.
-func buildBufferEntry(ev *hookinput.Event, cwd string, cfg *state.Config) (*buffer.Entry, error) {
+func buildBufferEntry(ev *hookinput.Event, cwd string, cfg *state.Config) (*captureResult, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	switch ev.ToolName {
 	case "Edit":
-		return &buffer.Entry{
+		if ev.ToolInput.FilePath == "" && ev.ToolInput.OldString == "" && ev.ToolInput.NewString == "" {
+			return nil, nil
+		}
+		return &captureResult{entry: &buffer.Entry{
 			TS:        now,
 			Tool:      "Edit",
 			File:      ev.ToolInput.FilePath,
 			Detail:    summarizeEdit(ev.ToolInput.OldString, ev.ToolInput.NewString, cfg.MaxDetailChars),
 			DiffLines: editDiffLines(ev.ToolInput.OldString, ev.ToolInput.NewString),
 			Changed:   true,
-		}, nil
+		}}, nil
 
 	case "Write":
 		content := ev.ToolInput.Content
-		return &buffer.Entry{
+		if ev.ToolInput.FilePath == "" {
+			return nil, nil
+		}
+		return &captureResult{entry: &buffer.Entry{
 			TS:        now,
 			Tool:      "Write",
 			File:      ev.ToolInput.FilePath,
 			Detail:    fmt.Sprintf("wrote %d bytes", len(content)),
 			DiffLines: strings.Count(content, "\n"),
 			Changed:   true,
-		}, nil
+		}}, nil
 
 	case "Bash":
 		return buildBashEntry(ev, cwd, cfg, now)
@@ -210,7 +240,12 @@ func editDiffLines(oldStr, newStr string) int {
 // command with Changed=false. git errors are surfaced as DevlogErrors so
 // the caller can log them once — the buffer entry is still returned so
 // the agent's action is visible in the trajectory.
-func buildBashEntry(ev *hookinput.Event, cwd string, cfg *state.Config, now string) (*buffer.Entry, error) {
+//
+// The returned captureResult.diffHash is a SHA-256 fingerprint of the
+// raw `git diff HEAD` output. Capture() uses it to detect when the
+// same dirty worktree is being re-observed across consecutive Bash
+// calls (i.e., the command didn't actually change anything).
+func buildBashEntry(ev *hookinput.Event, cwd string, cfg *state.Config, now string) (*captureResult, error) {
 	if isDevlogInternalBashCommand(ev.ToolInput.Command) {
 		return nil, nil
 	}
@@ -222,36 +257,38 @@ func buildBashEntry(ev *hookinput.Event, cwd string, cfg *state.Config, now stri
 
 	stat, err := git.DiffStat(cwd)
 	if err != nil {
-		// Non-fatal: surface the diff failure but still record the
-		// command so the trajectory reflects what the agent tried.
 		entry.Changed = false
 		entry.DiffLines = 0
-		return entry, err
+		return &captureResult{entry: entry}, err
 	}
 
 	if !stat.Changed {
 		entry.Changed = false
 		entry.DiffLines = 0
-		return entry, nil
+		return &captureResult{entry: entry}, nil
 	}
 
 	diffOut, diffErr := git.Diff(cwd, cfg.MaxDiffChars)
 	entry.Changed = true
+
+	var hash string
+	if diffOut != "" {
+		h := sha256.Sum256([]byte(diffOut))
+		hash = hex.EncodeToString(h[:16])
+	}
+
 	if diffErr != nil {
-		// Same treatment — keep the command, report the diff failure.
-		return entry, diffErr
+		return &captureResult{entry: entry, diffHash: hash}, diffErr
 	}
 
 	entry.DiffLines = strings.Count(diffOut, "\n")
-	// If the command itself had text, prefer to keep that as Detail and
-	// append the diff summary. Otherwise use the diff as the detail.
 	if strings.TrimSpace(entry.Detail) == "" {
 		entry.Detail = truncateRunes(diffOut, cfg.MaxDiffChars)
 	} else {
 		combined := entry.Detail + "\n" + truncateRunes(diffOut, cfg.MaxDiffChars-len(entry.Detail)-1)
 		entry.Detail = truncateRunes(combined, cfg.MaxDiffChars)
 	}
-	return entry, nil
+	return &captureResult{entry: entry, diffHash: hash}, nil
 }
 
 func isDevlogInternalBashCommand(command string) bool {

@@ -125,6 +125,26 @@ func TestParseOpenCodeToolNameNormalization(t *testing.T) {
 	}
 }
 
+func TestParseOpenCodeToolEventAcceptsArgsField(t *testing.T) {
+	raw := []byte(`{"tool":"edit","args":{"file_path":"src/api/handler.go","old_string":"a","new_string":"b"},"sessionId":"oc-sess-args"}`)
+	ev, err := Parse("opencode", "posttool", raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if ev.SessionID != "oc-sess-args" {
+		t.Errorf("SessionID = %q", ev.SessionID)
+	}
+	if ev.ToolName != "Edit" {
+		t.Errorf("ToolName = %q, want Edit", ev.ToolName)
+	}
+	if ev.ToolInput.FilePath != "src/api/handler.go" {
+		t.Errorf("FilePath = %q", ev.ToolInput.FilePath)
+	}
+	if ev.ToolInput.OldString != "a" || ev.ToolInput.NewString != "b" {
+		t.Errorf("ToolInput = %+v", ev.ToolInput)
+	}
+}
+
 func TestParseClaudeUserPromptSubmit(t *testing.T) {
 	raw := []byte(`{"session_id":"sess-x","cwd":"/proj","prompt":"refactor auth"}`)
 	ev, err := Parse("claude", "prompt", raw)

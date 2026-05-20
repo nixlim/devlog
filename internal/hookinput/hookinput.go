@@ -134,19 +134,24 @@ func parseOpenCode(kind string, raw []byte) (*Event, error) {
 		var payload struct {
 			Tool      string          `json:"tool"`
 			Input     json.RawMessage `json:"input"`
+			Args      json.RawMessage `json:"args"`
 			SessionID string          `json:"sessionId"`
 		}
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, fmt.Errorf("parse opencode tool event: %w", err)
 		}
+		toolInput := payload.Input
+		if !hasJSONObject(toolInput) {
+			toolInput = payload.Args
+		}
 		ev := &Event{
 			SessionID:    payload.SessionID,
 			ToolName:     normaliseOpenCodeTool(payload.Tool),
 			Cwd:          cwd,
-			RawToolInput: payload.Input,
+			RawToolInput: toolInput,
 		}
-		if hasJSONObject(payload.Input) {
-			if err := json.Unmarshal(payload.Input, &ev.ToolInput); err != nil {
+		if hasJSONObject(toolInput) {
+			if err := json.Unmarshal(toolInput, &ev.ToolInput); err != nil {
 				return nil, fmt.Errorf("parse opencode tool input: %w", err)
 			}
 		}

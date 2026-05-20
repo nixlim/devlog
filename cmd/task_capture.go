@@ -119,6 +119,11 @@ func isGeneratedDevlogPrompt(s string) bool {
 	if strings.Contains(trimmed, prompt.CompanionSystemPrompt) {
 		return true
 	}
+	if strings.Contains(trimmed, "[DevLog Companion") &&
+		strings.Contains(trimmed, "Trajectory Assessment]") &&
+		strings.Contains(trimmed, "\nSTATUS:") {
+		return true
+	}
 	return strings.HasPrefix(trimmed, "ORIGINAL TASK:\n") &&
 		strings.Contains(trimmed, "\nUSER UPDATES:\n") &&
 		strings.Contains(trimmed, "\nDEV LOG:\n") &&

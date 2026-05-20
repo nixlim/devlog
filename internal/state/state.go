@@ -43,6 +43,7 @@ type State struct {
 	LastCompanion       *LastCompanion `json:"last_companion,omitempty"`
 	FlushInProgress     bool           `json:"flush_in_progress"`
 	CompanionInProgress bool           `json:"companion_in_progress"`
+	LastDiffHash        string         `json:"last_diff_hash,omitempty"`
 }
 
 // Load reads and decodes the state file at path. A missing file is

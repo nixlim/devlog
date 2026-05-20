@@ -18,6 +18,12 @@ func TestPluginSource(t *testing.T) {
 	if !strings.Contains(s, `"edit"`) || !strings.Contains(s, `"write"`) || !strings.Contains(s, `"bash"`) {
 		t.Error("PluginSource should filter tool.execute.after on edit/write/bash")
 	}
+	if !strings.Contains(s, "input.args") {
+		t.Error("PluginSource should forward OpenCode tool args to devlog capture")
+	}
+	if !strings.Contains(s, "!p.synthetic") {
+		t.Error("PluginSource should exclude synthetic chat parts from task capture")
+	}
 	if !strings.Contains(s, "throw new Error(feedback)") {
 		t.Error("PluginSource should block the tool call when check-feedback emits feedback")
 	}

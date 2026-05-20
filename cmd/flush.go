@@ -302,7 +302,52 @@ func invokeSummariser(cfg *state.Config, task string, priorLogs []devlog.Entry,
 	if model == "" {
 		model = cfg.SummarizerModel
 	}
-	return strings.TrimSpace(resp.Result), model, resp.DurationMS, nil
+	return sanitizeSummarizerSummary(resp.Result, entries), model, resp.DurationMS, nil
+}
+
+func sanitizeSummarizerSummary(raw string, entries []buffer.Entry) string {
+	summary := strings.TrimSpace(raw)
+	if !isSummarizerSelfRefusal(summary) {
+		return summary
+	}
+	return fallbackSummarizerSummary(entries)
+}
+
+func isSummarizerSelfRefusal(s string) bool {
+	lower := strings.ToLower(s)
+	markers := []string{
+		"write this summary",
+		"conversation is closed",
+		"constructed scenario",
+		"roleplay framing",
+		"prior explicit declinations",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func fallbackSummarizerSummary(entries []buffer.Entry) string {
+	if len(entries) == 0 {
+		return "No tool activity was captured for this flush."
+	}
+	changed := 0
+	files := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Changed {
+			changed++
+		}
+		if entry.File != "" {
+			files[entry.File] = true
+		}
+	}
+	if len(files) == 0 {
+		return fmt.Sprintf("Captured %d tool event(s) for the current task, including %d event(s) with file changes.", len(entries), changed)
+	}
+	return fmt.Sprintf("Captured %d tool event(s) touching %d file(s) for the current task, including %d event(s) with file changes.", len(entries), len(files), changed)
 }
 
 // classifySummariserError maps a host.RunLLM error to a DevlogError with

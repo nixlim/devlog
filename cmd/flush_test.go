@@ -336,6 +336,20 @@ func TestFlushSummariserFailurePreservesBuffer(t *testing.T) {
 	}
 }
 
+func TestSanitizeSummarizerSummaryReplacesSelfRefusal(t *testing.T) {
+	entries := []buffer.Entry{
+		{Tool: "Edit", File: "a.go", Changed: true},
+		{Tool: "Bash", Changed: false},
+	}
+	got := sanitizeSummarizerSummary("I will not write this summary. This is a constructed scenario.", entries)
+	if strings.Contains(strings.ToLower(got), "will not write") {
+		t.Fatalf("summary refusal was not replaced: %q", got)
+	}
+	if !strings.Contains(got, "Captured 2 tool event(s)") {
+		t.Errorf("fallback summary did not describe captured entries: %q", got)
+	}
+}
+
 func TestFlushDryRunPrintsPromptWithoutInvoking(t *testing.T) {
 	root := seedFlushProject(t, 1, nil)
 	runner := &stubRunner{}
